@@ -7,3 +7,6 @@ torch
 huggingface-hub
 fasttext
 numpy<2.0
+python-docx
+beautifulsoup4
+lxml

@@ -5,10 +5,6 @@ from processors.extractor import *
 from processors.translator import *
 from processors.identifier import *
 
-from processors.extractor import LayoutExtractor
-from processors.identifier import LanguageIdentifier
-from processors.translator import LindatTranslator
-
 
 def main():
     parser = argparse.ArgumentParser(description="Lindat Translation Wrapper (PDF/XML/TXT)")
@@ -35,8 +31,16 @@ def main():
     # 2. Identify Language
     print("Identifying source language...")
     identifier = LanguageIdentifier()
-    src_lang = identifier.detect(raw_text)
-    print(f"Detected Language: {src_lang}")
+    src_lang, lang_score = identifier.detect(raw_text)
+
+    # UPDATED: Check confidence score
+    # If confidence is low (< 0.4), assume data is inadequate for detection and default to Czech
+    if lang_score < 0.4:
+        print(f"Warning: Language detection confidence low ({round(lang_score, 3)} < 0.4).")
+        print("Defaulting source language to 'cs' (Czech).")
+        src_lang = 'cs'
+    else:
+        print(f"Detected Language: {src_lang} - Confidence: {round(lang_score * 100, 3)}%")
 
     # 3. Translate
     if src_lang == args.target_lang:
