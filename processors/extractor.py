@@ -9,6 +9,8 @@ try:
 except ImportError:
     print("WARNING: 'v3' module not found. LayoutReader inference will fail.")
 
+torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Found device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
 
 class LayoutExtractor:
     def __init__(self, model_path="hantian/layoutreader"):

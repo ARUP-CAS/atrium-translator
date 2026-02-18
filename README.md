@@ -18,11 +18,20 @@ identifies the source language, and translates the content to English (or other 
 This project relies on the `v3` helper library from the official **LayoutReader** repository [^3]. You must manually 
 include this in your project root.
 
-1.  Clone the LayoutReader repository:
+1.  Clone the [LayoutReader]((https://github.com/ppaanngggg/layoutreader.git)) repository:
     ```bash
-    git clone [https://github.com/ppaanngggg/layoutreader.git](https://github.com/ppaanngggg/layoutreader.git)
+    git clone https://github.com/ppaanngggg/layoutreader.git
     ```
 2.  Copy the `v3` folder from the cloned repository into the root of this project.
+    ```bash
+    cp -r layoutreader/v3/ ./v3/
+    rm -rf layoutreader/  
+    ```
+3. Create virtual environment and activate it (optional but recommended):
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
 
 ### 2. Python Dependencies
 Install the required Python packages:

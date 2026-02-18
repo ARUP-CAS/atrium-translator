@@ -6,3 +6,4 @@ transformers
 torch
 huggingface-hub
 fasttext
+numpy<2.0

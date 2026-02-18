@@ -1,5 +1,10 @@
 import argparse
 import os
+
+from processors.extractor import *
+from processors.translator import *
+from processors.identifier import *
+
 from processors.extractor import LayoutExtractor
 from processors.identifier import LanguageIdentifier
 from processors.translator import LindatTranslator
