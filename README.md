@@ -4,6 +4,9 @@ A modular Python wrapper for the **Lindat Translation API** [^1]. This tool proc
 (including PDF, ALTO XML, DOCX, HTML, CSV, and JSON), extracts text in the correct reading order using **LayoutReader** 
 (LayoutLMv3) [^3] for complex layouts, identifies the source language, and translates the content to English (or other supported languages).
 
+
+
+
 ## ✨ Features
 
 * 📄 **Multi-Format Support**: Accepts `.pdf`, `.xml` (ALTO), `.txt`, `.docx`, `.html`/`.htm`, `.csv`, and `.json` files.

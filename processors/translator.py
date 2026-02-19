@@ -28,7 +28,8 @@ class LindatTranslator:
             return ["fr-en", "cs-en", "de-en", "uk-en", "ru-en", "pl-en"]
 
     def translate(self, text, src_lang, tgt_lang="en"):
-        if src_lang == tgt_lang:
+        # NEW GUARD: Prevents unnecessary network calls for blanks
+        if not text or not text.strip() or src_lang == tgt_lang:
             return text
 
         model_name = f"{src_lang}-{tgt_lang}"
