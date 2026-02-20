@@ -11,12 +11,12 @@ A modular Python wrapper for the **Lindat Translation API** [^1]. This tool proc
   - [LayoutReader Dependency](#1--layoutreader-dependency)
   - [Python Dependencies](#2--python-dependencies)
 - [Project Structure](#-project-structure)
-- [Usage](#usage)
-  - [Basic Usage](#-basic-usage)
-  - [Specifying Output and Target Language](#-specifying-output-and-target-language)
+- [Usage](#-usage)
+  - [Basic Usage](#-basic-usage-flat-text-extraction)
+  - [Specifying Output and Target Language](#-targeted-xml-translation-in-place)
   - [Supported Arguments](#-supported-arguments)
 - [Logic Overview](#-logic-overview)
-- [Acknowledgements](-#acknowledgements)
+- [Acknowledgements](#-acknowledgements)
 
 ---
 
