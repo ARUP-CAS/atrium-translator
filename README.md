@@ -4,41 +4,58 @@ A modular Python wrapper for the **Lindat Translation API** [^1]. This tool proc
 (including PDF, ALTO XML, DOCX, HTML, CSV, and JSON), extracts text in the correct reading order using **LayoutReader** 
 (LayoutLMv3) [^3] for complex layouts, identifies the source language, and translates the content to English (or other supported languages).
 
+## 📚 Table of Contents
 
+- [Features](#-features)
+- [Prerequisites](#-prerequisites)
+  - [LayoutReader Dependency](#1--layoutreader-dependency)
+  - [Python Dependencies](#2--python-dependencies)
+- [Project Structure](#-project-structure)
+- [Usage](#usage)
+  - [Basic Usage](#-basic-usage)
+  - [Specifying Output and Target Language](#-specifying-output-and-target-language)
+  - [Supported Arguments](#-supported-arguments)
+- [Logic Overview](#-logic-overview)
+- [Acknowledgements](-#acknowledgements)
 
+---
 
 ## ✨ Features
 
 * 📄 **Multi-Format Support**: Accepts `.pdf`, `.xml` (ALTO), `.txt`, `.docx`, `.html`/`.htm`, `.csv`, and `.json` files.
-* 🧠 **Intelligent Layout Analysis**: Uses **LayoutReader** to reconstruct the correct reading order for PDFs and ALTO XML files, ensuring that multi-column or complex layouts are translated coherently [^3].
-* 🕵️ **Language Detection with Intelligent Fallback**: Automatically identifies the source language using **FastText** (Facebook) [^5]. If the detection confidence is low (< 0.4), it automatically defaults to Czech (`cs`) to ensure the pipeline continues.
-* 🔗 **Lindat API Integration**: Seamlessly connects to the Lindat Translation API (v2) for high-quality translation [^1].
+* 🎯 **Targeted In-Place XML Translation**: Translates specific, user-defined XML fields (e.g., ALTO `CONTENT` attributes or standard tags) while strictly preserving the original document structure and namespaces.
+* 🧠 **Intelligent Layout Analysis**: Uses **LayoutReader** to reconstruct the correct reading order for PDFs and standard ALTO XML extractions, ensuring that multi-column or complex layouts are translated coherently [^3]).
+* 🕵️ **Language Detection with Intelligent Fallback**: Automatically identifies the source language using **FastText** (Facebook) [^6]. If the detection confidence is low (< 0.4), it automatically defaults to Czech (`cs`) to ensure the pipeline continues.
+* 🔗 **Lindat API Integration**: Seamlessly connects to the Lindat Translation API (v2) for high-quality translation, including automatic cache handling to minimize redundant requests for identical XML strings [^1]).
 * 📐 **ALTO XML Parsing**: Native support for ALTO standards, including coordinate normalization and hyphenation handling.
 
 ## 🛠️ Prerequisites
 
 ### 1. 📚 LayoutReader Dependency
-This project relies on the `v3` helper library from the official **LayoutReader** repository [^3]. You must manually 
+
+This project relies on the `v3` helper library from the official **LayoutReader** repository [^3]). You must manually
 include this in your project root.
 
-1.  Clone the [LayoutReader]((https://github.com/ppaanngggg/layoutreader.git)) repository:
-    ```bash
-    git clone https://github.com/ppaanngggg/layoutreader.git
-    ```
-2.  Copy the `v3` folder from the cloned repository into the root of this project.
-    ```bash
-    cp -r layoutreader/v3/ ./v3/
-    rm -rf layoutreader/  
-    ```
+1. Clone the [LayoutReader](https://github.com/ppaanngggg/layoutreader)) repository:
+```bash
+git clone https://github.com/ppaanngggg/layoutreader.git
+```
+
+2. Copy the `v3` folder from the cloned repository into the root of this project.
+```bash
+cp -r layoutreader/v3/ ./v3/
+rm -rf layoutreader/  
+```
+
 3. Create virtual environment and activate it (optional but recommended):
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
 ### 2. 🐍 Python Dependencies
-Install the required Python packages:
 
+Install the required Python packages:
 ```bash
 pip install -r requirements.txt
 ```
@@ -47,52 +64,54 @@ pip install -r requirements.txt
 
 ```text
 lindat-wrapper/
-├── main.py                 # 🚀 Entry point for the CLI
+├── main.py                 # 🚀 Entry point for the CLI, routing standard vs. in-place XML processing
 ├── requirements.txt        # 📦 Python dependencies
+├── xml-fields.txt          # 📄 List of XML tags to extract text from (for targeted XML translation)
 ├── v3/                     # ⚠️ [REQUIRED] Helper folder from LayoutReader repo
 ├── processors/
 │   ├── extractor.py        # 📄 Text extraction (ALTO/PDF/DOCX/HTML/CSV/JSON) + LayoutReader inference
 │   ├── identifier.py       # 🌍 FastText language identification (ISO 639-3 to 639-1 mapping)
 │   └── translator.py       # 🔄 Lindat API client with dynamic model fetching
-└── utils.py                # 🔧 ALTO parsing, box normalization, and text reconstruction
+└── utils.py                # 🔧 ALTO parsing, box normalization, and XML tree reconstruction
 ```
 
 ## 💻 Usage
 
-## Usage
-
 Run the wrapper from the command line. The default target language is English (`en`).
 
-### ▶️ Basic Usage
+### ▶️ Basic Usage (Flat Text Extraction)
 
 ```bash
 python main.py input_file.pdf
 ```
 
-### 🎯 Specifying Output and Target Language
+### 🎯 Targeted XML Translation (In-Place)
+
+Use this mode to translate specific XML elements while outputting a fully intact `.xml` file:
 
 ```bash
-python main.py document.xml --output translated_doc.txt --target_lang en
+python main.py document.xml --fields xml-fields.txt --target_lang en
 ```
 
 ### ⚙️ Supported Arguments
 
 * `input_file`: Path to the source file (`.pdf`, `.xml`, `.txt`, `.docx`, `.html`, `.csv`, `.json`).
-* `--output`: Path to save the translated text (default: `<input_name>_<target_lang>.txt` in the same directory).
+* `--fields`: Path to a `.txt` file containing XML tags to translate (one per line). Triggers the in-place XML processing mode.
+* `--output`: Path to save the translated text. Defaults to `<input_name>_<target_lang>.txt` (or `.xml` if using `--fields`) in the same directory.
 * `--target_lang`: Target language code (e.g., `en`, `cs`, `fr`). Default is `en`.
 
 ## 🧠 Logic Overview
 
-1. **📥 Extraction**:
+1. **📥 Standard Extraction**:
    * **PDF**: Uses `pdfplumber` to extract words and bounding boxes.
-   * **ALTO XML**: Parses XML tags to extract content strings and coordinates, normalizing them to the 0-1000 scale required by LayoutLM.
    * **DOCX**: Extracts paragraph text linearly.
    * **HTML**: Uses `BeautifulSoup` to safely extract text without merging words across tags.
    * **CSV**: Uses `pandas` to isolate and concatenate text specifically from columns containing "text" in their headers.
    * **JSON**: Recursively searches for and extracts string values from keys containing the word "text".
-2. **🧩 Reordering**: For PDFs and XMLs, extracted bounding boxes are passed to the **LayoutReader** model. It predicts the correct reading sequence in chunks of 350 tokens, fixing issues common in OCR outputs (e.g., reading across columns).
-3. **🔎 Identification**: The text is analyzed by **FastText** to determine the source language (mapping ISO 639-3 to ISO 639-1). If the confidence score is below `0.4`, the system automatically defaults to Czech (`cs`).
-4. **🗣️ Translation**: The text is chunked into 5,000-character segments (to respect API constraints) and sent to the **Lindat Translation API**. The translated chunks are then reassembled into the final output file.
+2. **🧩 Reordering**: For PDFs and raw XML extractions, bounding boxes are passed to the **LayoutReader** model. It predicts the correct reading sequence in chunks of 350 tokens, fixing issues common in OCR outputs (e.g., reading across columns).
+3. **🏛️ Targeted XML Processing** : When `--fields` is provided, the script parses the XML tree, matches the specified tags, and extracts the target text (prioritizing ALTO's `CONTENT` attributes over standard inner text). The translated text is directly injected back into the tree, and the file is saved with its original namespaces intact.
+4. **🔎 Identification**: The text is analyzed by **FastText** to determine the source language (mapping ISO 639-3 to ISO 639-1). If the confidence score is below `0.4`, the system automatically defaults to Czech (`cs`).
+5. **🗣️ Translation**: Text is passed to the **Lindat Translation API**. In XML mode, unique strings are cached to minimize API limits; otherwise, long texts are chunked into 5,000-character segments to respect Lindat's payload constraints.
 
 ## 🙏 Acknowledgements
 
