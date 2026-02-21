@@ -13,22 +13,42 @@ class LanguageIdentifier:
     }
 
     def __init__(self):
-        model_path = hf_hub_download(repo_id="facebook/fasttext-language-identification", filename="model.bin")
-        self.model = fasttext.load_model(model_path)
+        """
+        Initializes the LanguageIdentifier by downloading and loading
+        the FastText language identification model from Hugging Face Hub.
+        """
+        try:
+            model_path = hf_hub_download(repo_id="facebook/fasttext-language-identification", filename="model.bin")
+            self.model = fasttext.load_model(model_path)
+        except Exception as e:
+            print(f"[ERROR] Failed to load FastText language model: {type(e).__name__} - {e}")
+            self.model = None
 
     def detect(self, text):
+        """
+        Detects the language of the provided text. Normalizes text structure,
+        queries the FastText model, and maps the ISO 639-3 result to ISO 639-1.
+        Returns a tuple: (language_code, confidence_score).
+        """
+        if not self.model:
+            print("[WARN] Language identification model is not loaded. Defaulting to 'en'.")
+            return 'en', 0.0
+
+        if not text or not text.strip():
+            return 'en', 0.0
+
         # Lowercase for better detection
         clean_text = text.replace('\n', ' ').lower()[:2000]
-        labels, scores = self.model.predict(clean_text)
 
-        # Label format is usually __label__ces_Latn
-        raw_label = labels[0].replace("__label__", "")
+        try:
+            labels, scores = self.model.predict(clean_text)
 
-        # Split 'ces_Latn' -> 'ces'
-        iso3_code = raw_label.split('_')[0]
+            raw_label = labels[0].replace("__label__", "")
+            iso3_code = raw_label.split('_')[0]
+            lang_code = self.CODE_MAP.get(iso3_code, iso3_code)
 
-        # Map 'ces' -> 'cs'. Return original if not found (fallback)
-        lang_code = self.CODE_MAP.get(iso3_code, iso3_code)
-
-        score = scores[0]
-        return lang_code, score
+            score = scores[0]
+            return lang_code, score
+        except Exception as e:
+            print(f"[ERROR] Language detection prediction failed: {type(e).__name__} - {e}")
+            return 'en', 0.0
