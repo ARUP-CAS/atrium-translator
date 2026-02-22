@@ -12,7 +12,7 @@ A modular Python wrapper for the **Lindat Translation API** [^1]. This tool proc
   - [📚 LayoutReader Dependency](#1--layoutreader-dependency)
   - [🐍 Python Dependencies](#2--python-dependencies)
 - [📂 Project Structure](#-project-structure)
-- [Usage](#-usage)
+- [💻 Usage](#-usage)
   - [💻 Basic Usage](#-batch-processing)
   - [📁 Specifying Output and Target Language](#-targeted-xml-translation-in-place)
   - [⚙️ Configuration File Support](#-configuration-file-support)
@@ -183,5 +183,4 @@ performed on per-`TextLine` manner (Each text line has a `String` element with `
 [^3]: https://github.com/FreeOCR-AI/layoutreader
 [^4]: https://atrium-research.eu/
 [^5]: https://huggingface.co/facebook/fasttext-language-identification
-[^8]: https://github.com/K4TEL/atrium-nlp-enrich
 [^7]: https://ufal.mff.cuni.cz/home-page
