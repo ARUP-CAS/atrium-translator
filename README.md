@@ -2,30 +2,33 @@
 
 A modular Python wrapper for the **Lindat Translation API** [^1]. This tool processes various document types 
 (including PDF, ALTO XML, DOCX, HTML, CSV, and JSON), extracts text in the correct reading order using **LayoutReader** 
-(LayoutLMv3) [^3] for complex layouts, identifies the source language, and translates the content to English (or other supported languages).
+(LayoutLMv3) [^3] for complex layouts, identifies the source language, and translates the content to English 
+(or other supported target languages).
 
 ## 📚 Table of Contents
 
-- [Features](#-features)
-- [Prerequisites](#-prerequisites)
-  - [LayoutReader Dependency](#1--layoutreader-dependency)
-  - [Python Dependencies](#2--python-dependencies)
-- [Project Structure](#-project-structure)
+- [✨ Features](#-features)
+- [🛠 Prerequisites](#-prerequisites)
+  - [📚 LayoutReader Dependency](#1--layoutreader-dependency)
+  - [🐍 Python Dependencies](#2--python-dependencies)
+- [📂 Project Structure](#-project-structure)
 - [Usage](#-usage)
-  - [Basic Usage](#-batch-processing)
-  - [Specifying Output and Target Language](#-targeted-xml-translation-in-place)
-  - [Supported Arguments](#-supported-arguments)
-- [Logic Overview](#-logic-overview)
-- [Acknowledgements](#-acknowledgements)
+  - [💻 Basic Usage](#-batch-processing)
+  - [📁 Specifying Output and Target Language](#-targeted-xml-translation-in-place)
+  - [⚙️ Configuration File Support](#-configuration-file-support)
+  - [🎯 Targeted XML Translation (In-Place)](#-targeted-xml-translation-in-place)
+  - [⚙ Supported Arguments](#-supported-arguments)
+- [🧠 Logic Overview](#-logic-overview)
+- [🙏 Acknowledgements](#-acknowledgements)
 
 ---
 
 ## ✨ Features
 
 * 📄 **Multi-Format Support**: Accepts `.pdf`, `.xml` (ALTO), `.txt`, `.docx`, `.html`/`.htm`, `.csv`, and `.json` files.
-* 🎯 **Targeted In-Place XML Translation**: Translates specific, user-defined XML fields (e.g., ALTO `CONTENT` attributes or standard tags) while strictly preserving the original document structure and namespaces.
-* 🧠 **Intelligent Layout Analysis**: Uses **LayoutReader** to reconstruct the correct reading order for PDFs and standard ALTO XML extractions, ensuring that multi-column or complex layouts are translated coherently [^3]).
-* 🕵️ **Language Detection with Intelligent Fallback**: Automatically identifies the source language using **FastText** (Facebook) [^6]. If the detection confidence is low (< 0.4), it automatically defaults to Czech (`cs`) to ensure the pipeline continues.
+* 🎯 **Targeted In-Place XML Translation**: Translates specific, user-defined XML fields (e.g., ALTO `CONTENT` attributes or standard tags) while strictly preserving the original document structure and namespaces - **KEY FEATURE** for ALTO XML processing.
+* 🧠 **Intelligent Layout Analysis**: Uses **LayoutReader** to reconstruct the correct reading order for PDFs and standard ALTO XML extractions, ensuring that multi-column or complex layouts are translated coherently [^3]). Uses bounding boxes of the text regions to predict the correct sequence.
+* 🕵️ **Language Detection with Intelligent Fallback**: Automatically identifies the source language using **FastText** (Facebook) [^5]. If the detection confidence is low (< 0.4), it automatically defaults to Czech (`cs`) to ensure the pipeline continues.
 * 🔗 **Lindat API Integration**: Seamlessly connects to the Lindat Translation API (v2) for high-quality translation, including automatic cache handling to minimize redundant requests for identical XML strings [^1]).
 * 📐 **ALTO XML Parsing**: Native support for ALTO standards, including coordinate normalization and hyphenation handling.
 
@@ -38,7 +41,7 @@ A modular Python wrapper for the **Lindat Translation API** [^1]. This tool proc
 This project relies on the `v3` helper library from the official **LayoutReader** repository [^3]). You must manually
 include this in your project root.
 
-1. Clone the [LayoutReader](https://github.com/ppaanngggg/layoutreader)) repository:
+1. Clone the [LayoutReader](https://github.com/ppaanngggg/layoutreader) repository:
 ```bash
 git clone https://github.com/ppaanngggg/layoutreader.git
 ```
@@ -91,6 +94,7 @@ Run the wrapper from the command line. The default target language is English (`
 ```bash
 python main.py input_file.pdf
 ```
+which would return `translated_files/input_file_en.txt` in the specified output director `translated_files`.
 
 ### 📁 Batch Processing
 
@@ -100,14 +104,16 @@ valid files based on the specified formats and output them to a designated folde
 ```bash
 python main.py ./my_documents --formats xml,pdf --target_lang en
 ```
+which would process only `XML` and `PDF` files in my_documents folder and by default 
+output them to `my_documents/translated_files/` with `_en` suffix.
 
 ### ⚙️ Configuration File Support
 
 Instead of passing all arguments via the command line, you can use a 
-configuration file (automatically looks for `config.txt` in the current directory) to define 
-default paths and parameters. Console arguments take precedence and will override config file
-parameters. Example [config.txt](config.txt):
+configuration file `config.txt` to define default paths and parameters. Note that console arguments 
+take precedence and will override config file parameters. 
 
+Example [config.txt](config.txt):
 ```ini
 input_path = ./my_documents
 source_lang = auto
@@ -119,8 +125,7 @@ fields = xml-fields.txt
 
 ### 🎯 Targeted XML Translation (In-Place)
 
-Use this mode to translate specific XML elements while outputting a fully 
-intact `.xml` file:
+Use this mode to translate specific XML elements while outputting a fully intact `.xml` file:
 
 ```bash
 python main.py document.xml --fields xml-fields.txt --target_lang en
