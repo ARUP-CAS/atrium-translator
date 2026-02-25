@@ -29,14 +29,15 @@ def process_amcr_xml(input_path, output_path, xpaths, translator, src_lang, tgt_
         tree = etree.parse(str(input_path))
         root = tree.getroot()
 
-        # OAI-PMH FIX: Deep search for AMCR namespaces instead of relying on the root node
+        # OAI-PMH FIX: Deep search for AMCR namespaces
         xpath_ns = {}
         for elem in root.iter():
             for prefix, uri in elem.nsmap.items():
                 if uri and 'amcr' in uri:
                     xpath_ns['amcr'] = uri
-                    break
-            if 'amcr' in xpath_ns:
+                if uri and 'OAI-PMH' in uri:
+                    xpath_ns['oai'] = uri  # Capture OAI envelope namespace
+            if 'amcr' in xpath_ns and 'oai' in xpath_ns:
                 break
 
         # Hard fallback if absolutely no namespace is explicitly found

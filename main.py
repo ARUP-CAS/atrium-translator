@@ -23,7 +23,27 @@ except ImportError:
 from processors.identifier import LanguageIdentifier
 from processors.translator import LindatTranslator
 from utils import process_alto_xml, process_amcr_xml
+import requests
+import tempfile
 
+
+def fetch_xml_from_url(url, download_dir):
+    """Downloads an XML file from a URL to a local directory."""
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response.raise_for_status()
+
+        # Extract a meaningful filename from the URL identifier
+        doc_id = url.split('=')[-1].replace('https://api.aiscr.cz/id/', '')
+        safe_name = "".join([c for c in doc_id if c.isalpha() or c.isdigit() or c in ('-', '_')]).rstrip()
+        local_path = download_dir / f"{safe_name}.xml"
+
+        with open(local_path, 'wb') as f:
+            f.write(response.content)
+        return local_path
+    except Exception as e:
+        print(f"[ERROR] Failed to download {url}: {e}")
+        return None
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="ATRIUM - Lindat Translation Wrapper (XML Focused)")
@@ -98,7 +118,27 @@ def main():
         with open(args.xpaths, 'r', encoding='utf-8') as f:
             xpaths_list = [line.strip() for line in f if line.strip() and not line.startswith('#')]
 
-    files_to_process = [f for f in input_path.rglob('*.xml') if f.is_file()] if input_path.is_dir() else [input_path]
+    files_to_process = []
+
+    # Create a temporary directory for downloads if a URL list is provided
+    download_dir = args.output if args.output else Path.cwd() / f"translated_{args.target_lang}"
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    if input_path.is_file() and input_path.suffix == '.txt':
+        print("[INFO] Text file detected. Reading URLs...")
+        with open(input_path, 'r', encoding='utf-8') as f:
+            urls = [line.strip() for line in f if line.strip() and line.startswith('http')]
+
+        for url in urls:
+            print(f"[INFO] Downloading: {url}")
+            local_file = fetch_xml_from_url(url, download_dir)
+            if local_file:
+                files_to_process.append(local_file)
+    elif input_path.is_dir():
+        files_to_process = [f for f in input_path.rglob('*.xml') if f.is_file()]
+    else:
+        files_to_process = [input_path]
+
 
     if not files_to_process:
         print(f"[WARN] No valid XML files found.")
