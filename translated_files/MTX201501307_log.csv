@@ -36,7 +36,7 @@ MTX201501307,3,3,Katastrální území:,Land registry:
 MTX201501307,3,4,Zubří u Nového Města na Moravě,Teeth at New Town in Moravia
 MTX201501307,3,5,Okres:,State:
 MTX201501307,3,6,Žďár nad Sázavou,Žďár nad Sázavou
-MTX201501307,3,7,Trať:,Line:
+MTX201501307,3,7,Trať:,Trať:
 MTX201501307,3,8,intravilán obce,intravilán obce
 MTX201501307,3,9,Parc. č.:,Parc. No:
 MTX201501307,3,10,"41/1, 41/5, 41/11, 42, 137/1","41/1, 41/5, 41/11, 42, 137/1"
@@ -50,12 +50,12 @@ MTX201501307,3,17,"16°07'25.16""E; 49°34'15.11""N, 16°07'24.43""E;","16°07'2
 MTX201501307,3,18,"49°34'16.12""N, 16°07'23.77""E; 49°34'11.87""N,","49°34'16.12""N, 16°07'23.77""E; 49°34'11.87""N,"
 MTX201501307,3,19,"16°07'21.36""E","16°07'21.36""E"
 MTX201501307,3,20,Nadmořská výška:,Altitude:
-MTX201501307,3,21,672 m n. m.,672 m above the sea level.
+MTX201501307,3,21,672 m n. m.,672 m n.m.
 MTX201501307,3,22,Číslo akce:,Action number:
 MTX201501307,3,23,62/2013,62/2013
 MTX201501307,3,24,Kultura:,Culture:
 MTX201501307,3,25,"pozdní středověk, časný novověk, novověk","Late Middle Ages, Early New Age, New Age"
-MTX201501307,3,26,(14. stol. - 20. stol.),(14th century - 20th century.)
+MTX201501307,3,26,(14. stol. - 20. stol.),(14th table. - 20th table.)
 MTX201501307,3,27,Doba výzkumu:,Research time:
 MTX201501307,3,28,2013,2013
 MTX201501307,3,29,Přírůstkové číslo výzkumu:,Incremental research number:
@@ -190,7 +190,7 @@ MTX201501307,9,4,1. Prokázání nebo vyloučení přítomnosti archeologických
 MTX201501307,9,5,"2. Rekonstrukce obousměrné geneze historického nadloží, intenzity a charakteru","2. Reconstruction of the bidirectional genesis of historical overburden, intensity and character"
 MTX201501307,9,6,osídlení.,settlement.
 MTX201501307,9,7,"3. Otázka pohybu luxusních a výjimečných předmětů v prostoru a čase, problém","3. The question of moving luxury and exceptional objects in space and time, the problem"
-MTX201501307,9,8,importů.,imports.
+MTX201501307,9,8,importů.,import.
 MTX201501307,9,9,Metodika výzkumu,Research Methodology
 MTX201501307,9,10,Přesný postup a způsob záchranného archeologického výzkumu byl volen podle,The exact procedure and method of the rescue archaeological research was chosen by
 MTX201501307,9,11,situace a časového harmonogramu stavby. Zásahy do archeologických terénů představovaly,the situation and the construction schedule. Interventions into archaeological terrains featured
@@ -435,8 +435,8 @@ MTX201501307,18,6,"Hosák, L. 2004: Historický místopis země Moravskoslezské
 MTX201501307,18,7,"Hosák, L. - Šrámek, R. 1980: Místní jména na Moravě a ve Slezsku 2. Praha.","Hosák, L. - Šrámek, R. 1980: Local names in Moravia and Silesia 2. Prague."
 MTX201501307,18,8,"Hušták, P. 2014: Záchranný archeologický výzkum „Kanalizace a ČOV aglomerace Jimramov“.","Hušták, P. 2014: Rescue Archaeological Research ‘Sewerage and WEEK of the Jimramov Agglomeration’."
 MTX201501307,18,9,"Nepublikovaná nálezová zpráva, Pueblo - archeologická společnost, Praha.","Unpublished find report, Pueblo - Archaeological Society, Prague."
-MTX201501307,18,10,"Chytil, J. - Chlumecký, P. - Demuth, K. - Wolfskron, A. 1856: Die Landtafel des","Caught, J. - Chlumecki, P. - Demuth, K. - Wolfskron, A. 1856: Die Landtafel des"
-MTX201501307,18,11,"Markgrafthumes Mähren (1348 - 1466), Brunner Cuda. Brno.","Markgrafthumes Mähren (1348 - 1466), Brunner Cuda. Brno."
+MTX201501307,18,10,"Chytil, J. - Chlumecký, P. - Demuth, K. - Wolfskron, A. 1856: Die Landtafel des","Chytil, J. - Chlumecký, P. - Demuth, K. - Wolfskron, A. 1856: The characteristic of the"
+MTX201501307,18,11,"Markgrafthumes Mähren (1348 - 1466), Brunner Cuda. Brno.","Markgrafthumes Moravia (1348 - 1466), Brunner Cuda. Brno."
 MTX201501307,18,12,"Pajer, J. 1983: Počátky novověké keramiky ve Strážnici. Strážnice.","Pajer, J. 1983: The beginnings of New Age ceramics in Strážnice. Officer."
 MTX201501307,18,13,"Pivec, J. 2002: Porovnání klimatické regionalizace ČR podle Moravce - Votýpky (1998) a","Pivec, J. 2002: Comparison of the Czech Republic's climate regionalisation according to Moravka - Votýpky (1998) and"
 MTX201501307,18,14,"Quitta (1971). In: Viewgh, J. [ed.]: Problematika lesnické typologie IV. Sborník referátů ze","Quitta (1971). In: Viewgh, J. [ed.]: The issue of forestry typology IV. Sborník referát ze"
@@ -603,7 +603,7 @@ MTX201501307,62,3,hnědá,brown
 MTX201501307,64,1,šedo-hnědá,grey-brown
 MTX201501307,65,1,55%,55%
 MTX201501307,68,1,0),(0)
-MTX201501307,68,2,u,u
+MTX201501307,68,2,u,Commission:
 MTX201501307,68,3,9,9
 MTX201501307,68,4,= 9,= 9
 MTX201501307,68,5,— Q.,— Q.
@@ -612,7 +612,7 @@ MTX201501307,68,7,O t,O t
 MTX201501307,68,8,D .2,D .2
 MTX201501307,68,9,>0,>0
 MTX201501307,68,10,n .Q,n .Q
-MTX201501307,68,11,9 .X,9 .X
+MTX201501307,68,11,9 .X,9.X
 MTX201501307,68,12,o 9,o 9
 MTX201501307,68,13,o 2,o 2
 MTX201501307,68,14,9 a,9 a
@@ -800,7 +800,7 @@ MTX201501307,68,195,t,t
 MTX201501307,68,196,O,O
 MTX201501307,68,197,s,s
 MTX201501307,68,198,O,O
-MTX201501307,68,199,LA) LA),LA)
+MTX201501307,68,199,LA) LA),(LA)
 MTX201501307,68,200,s P,s P
 MTX201501307,68,201,"O o""","O o"""
 MTX201501307,68,202,o,o
@@ -923,7 +923,7 @@ MTX201501307,68,318,0,0
 MTX201501307,68,319,'CD,'CD
 MTX201501307,68,320,E,E
 MTX201501307,68,321,.Y,.Y
-MTX201501307,68,322,>un,>un
+MTX201501307,68,322,>un,>and
 MTX201501307,68,323,'CD,'CD
 MTX201501307,68,324,E,E
 MTX201501307,68,325,.Y,.Y
@@ -937,13 +937,13 @@ MTX201501307,68,332,f í,f i
 MTX201501307,68,333,3 o,3 o
 MTX201501307,68,334,n. -,n. -
 MTX201501307,68,335,©,©
-MTX201501307,68,336,&,&A
+MTX201501307,68,336,&,&
 MTX201501307,68,337,O,O
 MTX201501307,68,338,E,E
 MTX201501307,68,339,o,o
-MTX201501307,68,340,&,&A
+MTX201501307,68,340,&,&
 MTX201501307,68,341,O,O
-MTX201501307,68,342,&,&A
+MTX201501307,68,342,&,&
 MTX201501307,68,343,o,o
 MTX201501307,68,344,CZ,CZ
 MTX201501307,68,345,CD,CD
@@ -1030,9 +1030,9 @@ MTX201501307,68,425,> 8,> 8
 MTX201501307,68,426,on,on
 MTX201501307,68,427,o,o
 MTX201501307,68,428,d,d
-MTX201501307,68,429,m,m
+MTX201501307,68,429,m,M
 MTX201501307,68,430,U),U)
-MTX201501307,68,431,m,m
+MTX201501307,68,431,m,M
 MTX201501307,68,432,CD,CD
 MTX201501307,68,433,LD,LD
 MTX201501307,68,434,(D,(D
@@ -1044,11 +1044,11 @@ MTX201501307,68,439,C,C
 MTX201501307,68,440,(D,(D
 MTX201501307,68,441,LD,LD
 MTX201501307,68,442,CD,CD
-MTX201501307,68,443,m,m
+MTX201501307,68,443,m,M
 MTX201501307,68,444,CD,CD
 MTX201501307,68,445,>,>
 MTX201501307,68,446,ro,ro
-MTX201501307,68,447,5 s,5 sec
+MTX201501307,68,447,5 s,5 s
 MTX201501307,68,448,>N tí,>N ti
 MTX201501307,68,449,$ d,$ d
 MTX201501307,68,450,S o,S o
@@ -1061,7 +1061,7 @@ MTX201501307,68,456,D,D
 MTX201501307,68,457,C,C
 MTX201501307,68,458,N,N
 MTX201501307,68,459,o,o
-MTX201501307,68,460,u,u
+MTX201501307,68,460,u,Commission:
 MTX201501307,68,461,3 3,3 3
 MTX201501307,68,462,o,o
 MTX201501307,68,463,o,o
@@ -1071,7 +1071,7 @@ MTX201501307,68,466,LD,LD
 MTX201501307,68,467,CM,CM
 MTX201501307,68,468,O,O
 MTX201501307,68,469,LD,LD
-MTX201501307,68,470,m,m
+MTX201501307,68,470,m,M
 MTX201501307,68,471,o,o
 MTX201501307,68,472,LD,LD
 MTX201501307,68,473,s,s
@@ -1110,67 +1110,67 @@ MTX201501307,71,11,Datum,Date
 MTX201501307,71,12,pořízení,acquisition
 MTX201501307,71,13,1,1
 MTX201501307,71,14,S1,S1
-MTX201501307,71,15,1:20,1:20 a.m.
+MTX201501307,71,15,1:20,1:20
 MTX201501307,71,16,"řezy 1,2,3,4, negativ S1","sections 1,2,3,4, negative S1"
 MTX201501307,71,17,Hrušková,Pear
 MTX201501307,71,18,24.4.2013,24.4.2013
 MTX201501307,71,19,10,10
 MTX201501307,71,20,S3,S3
-MTX201501307,71,21,1:20,1:20 a.m.
+MTX201501307,71,21,1:20,1:20
 MTX201501307,71,22,"řezy 9,11,33","cuts 9,11,33"
 MTX201501307,71,23,Hrušková,Pear
 MTX201501307,71,24,30.4.2013,30.4.2013
 MTX201501307,71,25,11,11
 MTX201501307,71,26,S8,S8
-MTX201501307,71,27,1:20,1:20 a.m.
+MTX201501307,71,27,1:20,1:20
 MTX201501307,71,28,"řezy 29,30,31,32","cuts 29,30,31,32"
 MTX201501307,71,29,Hrušková,Pear
 MTX201501307,71,30,30.4.2013,30.4.2013
 MTX201501307,71,31,2,2
 MTX201501307,71,32,S2,S2
-MTX201501307,71,33,1:20,1:20 a.m.
+MTX201501307,71,33,1:20,1:20
 MTX201501307,71,34,"konstrukce 700, půdorys","structure 700, floor plan"
 MTX201501307,71,35,Bařinka,Bařinka
 MTX201501307,71,36,24.4.2013,24.4.2013
 MTX201501307,71,37,3,3
 MTX201501307,71,38,S3,S3
-MTX201501307,71,39,1:20,1:20 a.m.
+MTX201501307,71,39,1:20,1:20
 MTX201501307,71,40,"řezy 9,10,11,12, negativ S3","sections 9,10,11,12, negative S3"
 MTX201501307,71,41,Hrušková,Pear
 MTX201501307,71,42,25.4.2013,4/25/2013
 MTX201501307,71,43,4,4
 MTX201501307,71,44,S4,S4
-MTX201501307,71,45,1:20,1:20 a.m.
+MTX201501307,71,45,1:20,1:20
 MTX201501307,71,46,"řezy 13,14,15,16, negativ S4","sections 13,14,15,16, negative S4"
 MTX201501307,71,47,Hrušková,Pear
 MTX201501307,71,48,26.4.2013,26.4.2013
 MTX201501307,71,49,5,5
 MTX201501307,71,50,S5,S5
-MTX201501307,71,51,1:20,1:20 a.m.
+MTX201501307,71,51,1:20,1:20
 MTX201501307,71,52,"řezy 17,18,19,20, negativ S5","sections 17,18,19,20, negative S5"
 MTX201501307,71,53,Bařinka,Bařinka
 MTX201501307,71,54,27.4.2013,27.4.2013
 MTX201501307,71,55,6,6
 MTX201501307,71,56,S2,S2
-MTX201501307,71,57,1:20,1:20 a.m.
+MTX201501307,71,57,1:20,1:20
 MTX201501307,71,58,"řezy 6,7",sections 6.7
 MTX201501307,71,59,Hrušková,Pear
 MTX201501307,71,60,27.4.2013,27.4.2013
 MTX201501307,71,61,7,7
 MTX201501307,71,62,S2,S2
-MTX201501307,71,63,1:20,1:20 a.m.
+MTX201501307,71,63,1:20,1:20
 MTX201501307,71,64,"řezy 5,8, negativ S2","sections 5.8, negative S2"
 MTX201501307,71,65,Hrušková,Pear
 MTX201501307,71,66,27.4.2013,27.4.2013
 MTX201501307,71,67,8,8
 MTX201501307,71,68,S6,S6
-MTX201501307,71,69,1:20,1:20 a.m.
+MTX201501307,71,69,1:20,1:20
 MTX201501307,71,70,"řezy 21,22,24, negativ S6","sections 21,22,24, negative S6"
 MTX201501307,71,71,Hrušková,Pear
 MTX201501307,71,72,29.4.2013,4/29/2013
 MTX201501307,71,73,9,9
 MTX201501307,71,74,S7,S7
-MTX201501307,71,75,1:20,1:20 a.m.
+MTX201501307,71,75,1:20,1:20
 MTX201501307,71,76,"řezy 25,26,27,28, negativ S7","sections 25,26,27,28, negative S7"
 MTX201501307,71,77,Hrušková,Pear
 MTX201501307,71,78,29.4.2013,4/29/2013

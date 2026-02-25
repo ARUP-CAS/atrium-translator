@@ -36,8 +36,10 @@ class LindatTranslator:
         model_name = f"{src_lang}-{tgt_lang}"
 
         if self.supported_models and model_name not in self.supported_models:
-            print(f"[ERROR] Model '{model_name}' not found. Available models: {', '.join(self.supported_models)}")
-            return f"[ERROR: Model {model_name} not supported]"
+            model_name = f"cs-en"
+            src_lang = "cs"
+            tgt_lang = "en"
+
 
         chunks = self._chunk_text(text)
         translated_chunks = []
