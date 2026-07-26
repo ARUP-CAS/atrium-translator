@@ -1,5 +1,5 @@
 """
-tests/test_document_schema.py
+tests/test_atrium_document.py
 
 Tests the ATRIUM Document Schema & Accretion Policy ("paradata pair" model)
 contract (six rules) for the translator integration.
