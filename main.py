@@ -242,7 +242,7 @@ def process_single_file(
 
     doc_id = file_path.name.split(".")[0]
     csv_log_path = output_file.with_name(f"{doc_id}_log.csv")
-    paradata_ref = str(Path(_logger.paradata_dir) / f"{_logger._run_id}_{_logger.program}.json")
+    paradata_ref = str(Path(_logger.paradata_dir) / f"{_logger.run_id}_{_logger.program}.json")
 
     doc_json_out = args.document_json_out or output_file.with_name(f"{doc_id}.document.json")
     success = False
@@ -264,7 +264,7 @@ def process_single_file(
                 doc_id=doc_id,
                 program="translator",
                 baseline=args.document_json,
-                run_id=_logger._run_id,
+                run_id=_logger.run_id,
                 paradata_ref=paradata_ref,
             ) as doc:
                 if args.alto:
@@ -298,7 +298,7 @@ def process_single_file(
 
                 # Known wart: retrieve the license detail using the private logger call
                 if hasattr(_logger, "_license_block"):
-                    doc.add_license_detail(_logger._license_block())
+                    doc.add_license_detail(_logger.get_license_block())
 
                 doc.finalize(str(doc_json_out))
 
