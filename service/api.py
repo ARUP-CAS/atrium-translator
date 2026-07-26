@@ -8,11 +8,12 @@ Brings this repository into API parity with the rest of the ATRIUM pipeline.
 import argparse
 import os
 import tempfile
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from atrium_paradata import ParadataLogger
 from main import process_single_file
@@ -86,6 +87,7 @@ async def verify_content_type(request: Request):
 async def translate_document(
     request: Request,
     file: UploadFile = File(...),
+    document_json: UploadFile = File(None, description="Optional baseline ATRIUM Document JSON (accretion model)"),
     source_lang: str = "auto",
     target_lang: str = "en",
     is_alto: bool = True,
@@ -103,11 +105,24 @@ async def translate_document(
         input_path = work_dir / file.filename
         input_path.write_bytes(content)
 
+        doc_json_path = None
+        doc_json_out_path = work_dir / f"{file.filename.split('.')[0]}.document.json"
+
+        if document_json:
+            doc_json_path = work_dir / (document_json.filename or "baseline.json")
+            doc_json_path.write_bytes(await document_json.read())
+
         output_dir = work_dir / "output"
         output_dir.mkdir()
 
         args = argparse.Namespace(
-            source_lang=source_lang, target_lang=target_lang, alto=is_alto, fast_align=False, xsd=None
+            source_lang=source_lang,
+            target_lang=target_lang,
+            alto=is_alto,
+            fast_align=False,
+            xsd=None,
+            document_json=doc_json_path,
+            document_json_out=doc_json_out_path,
         )
 
         # ALTO vs standard XML naming preservation
@@ -135,7 +150,7 @@ async def translate_document(
             program="translator-api",
             config=para_config,
             paradata_dir=str(output_dir / "paradata"),
-            output_types=["xml", "csv"],
+            output_types=["xml", "csv", "json"],
         ) as logger:
             success, _ = process_single_file(
                 file_path=input_path,
@@ -171,10 +186,34 @@ async def translate_document(
         # is already deleted before the first byte is sent — returning an
         # in-memory Response eliminates that race entirely.
         with open(output_path, "rb") as fh:
-            content_bytes = fh.read()
+            xml_bytes = fh.read()
+
+        json_bytes = None
+        if doc_json_out_path.exists():
+            with open(doc_json_out_path, "rb") as fh:
+                json_bytes = fh.read()
+
+    # Deliver multipart/mixed response if document_json is active and generated, allowing
+    # clients to retrieve both the updated ATRIUM Document JSON and the resulting ALTO XML.
+    if json_bytes:
+        boundary = uuid.uuid4().hex
+        headers = {"Content-Type": f"multipart/mixed; boundary={boundary}"}
+
+        def generate_multipart():
+            yield f"--{boundary}\r\n".encode()
+            yield b"Content-Type: application/xml\r\n"
+            yield f'Content-Disposition: attachment; filename="{out_filename}"\r\n\r\n'.encode()
+            yield xml_bytes + b"\r\n"
+            yield f"--{boundary}\r\n".encode()
+            yield b"Content-Type: application/json\r\n"
+            yield f'Content-Disposition: attachment; filename="{doc_json_out_path.name}"\r\n\r\n'.encode()
+            yield json_bytes + b"\r\n"
+            yield f"--{boundary}--\r\n".encode()
+
+        return StreamingResponse(generate_multipart(), headers=headers)
 
     return Response(
-        content=content_bytes,
+        content=xml_bytes,
         media_type="application/xml",
         headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
     )

@@ -109,12 +109,23 @@ def _resolve_namespaces(root) -> dict:
 
 
 def process_metadata_xml(
-    input_path, output_path, xpaths, translator, src_lang, tgt_lang, xsd_schema=None, csv_writer=None, identifier=None
+    input_path,
+    output_path,
+    xpaths,
+    translator,
+    src_lang,
+    tgt_lang,
+    xsd_schema=None,
+    csv_writer=None,
+    identifier=None,
+    doc=None,
 ):
     try:
         tree = etree.parse(str(input_path), parser=_SECURE_PARSER)
         root = tree.getroot()
         xpath_ns = _resolve_namespaces(root)
+
+        translated_texts = []
 
         for xpath in xpaths:
             try:
@@ -134,6 +145,7 @@ def process_metadata_xml(
 
                     translated = translator.translate(original_text, actual_src_lang, tgt_lang)
                     elem.text = translated
+                    translated_texts.append(translated)
 
                     if csv_writer:
                         doc_name = input_path.name.split(".")[0]
@@ -141,6 +153,26 @@ def process_metadata_xml(
 
             except etree.XPathError as e:
                 print(f"[WARN] XPath error for '{xpath}': {e}")
+
+        # ATRIUM Document JSON accretion update for metadata blocks
+        if doc is not None:
+            doc.set_block("translations", {tgt_lang: "\n\n".join(translated_texts).strip()})
+
+            existing_entities = doc._data.get("entities")
+            if existing_entities:
+                updated_entities = []
+                for entity in existing_entities:
+                    surface_text = entity.get("surface", "")
+                    translated_surface = translator.translate(surface_text, src_lang, tgt_lang) if surface_text else ""
+
+                    # We MUST preserve alignment keys so merge_block maps to the existing entities
+                    update_payload = {f"translation_{tgt_lang}": translated_surface}
+                    for key_field in ["page", "line", "char_span"]:
+                        if key_field in entity:
+                            update_payload[key_field] = entity[key_field]
+
+                    updated_entities.append(update_payload)
+                doc.merge_block("entities", updated_entities)
 
         if xsd_schema:
             print(f"[INFO] Validating {output_path.name} against XSD …")
@@ -266,7 +298,15 @@ def _align_tokens_proportional(block_text, source_line_texts):
 
 
 def process_alto_xml(
-    input_path, output_path, translator, src_lang, tgt_lang, csv_writer=None, identifier=None, line_anchors=True
+    input_path,
+    output_path,
+    translator,
+    src_lang,
+    tgt_lang,
+    csv_writer=None,
+    identifier=None,
+    line_anchors=True,
+    doc=None,
 ):
     """
     Translate an ALTO XML document in place (dual-pass reconstruction).
@@ -285,6 +325,8 @@ def process_alto_xml(
 
         pages = root.xpath("//alto:Page", namespaces=ns) if use_ns else root.xpath("//Page")
         total_pages = len(pages)
+
+        full_translated_blocks = []
 
         for page_idx, page in enumerate(pages, 1):
             text_blocks = page.xpath(".//alto:TextBlock", namespaces=ns) if use_ns else page.xpath(".//TextBlock")
@@ -411,6 +453,9 @@ def process_alto_xml(
                 sys.stdout.flush()
 
                 block_tgt = bdata["block_tgt"]
+                if block_tgt:
+                    full_translated_blocks.append(block_tgt)
+
                 lines_data = bdata["lines_data"]
 
                 if line_anchors:
@@ -445,6 +490,26 @@ def process_alto_xml(
 
             if num_blocks > 0:
                 print()
+
+        # ATRIUM Document JSON accretion update for ALTO blocks
+        if doc is not None:
+            doc.set_block("translations", {tgt_lang: "\n\n".join(full_translated_blocks).strip()})
+
+            existing_entities = doc._data.get("entities")
+            if existing_entities:
+                updated_entities = []
+                for entity in existing_entities:
+                    surface_text = entity.get("surface", "")
+                    translated_surface = translator.translate(surface_text, src_lang, tgt_lang) if surface_text else ""
+
+                    # We MUST preserve alignment keys so merge_block maps to the existing entities
+                    update_payload = {f"translation_{tgt_lang}": translated_surface}
+                    for key_field in ["page", "line", "char_span"]:
+                        if key_field in entity:
+                            update_payload[key_field] = entity[key_field]
+
+                    updated_entities.append(update_payload)
+                doc.merge_block("entities", updated_entities)
 
         tree.write(str(output_path), encoding="utf-8", xml_declaration=True)
         print(f"[SUCCESS] Saved ALTO translation → {output_path}")

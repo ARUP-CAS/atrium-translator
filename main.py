@@ -28,6 +28,7 @@ except ImportError:
         print()
 
 
+from atrium_document import DocumentRecord
 from atrium_paradata import ParadataLogger
 from processors.backend import TranslationBackend, get_backend
 from processors.chunking import DEFAULT_CHUNK_SIZE
@@ -138,6 +139,18 @@ def parse_arguments():
         help="Path to a CSV vocabulary file (source_lemma,target_translation).",
     )
     parser.add_argument(
+        "--document-json",
+        type=Path,
+        default=None,
+        help="Optional baseline ATRIUM Document JSON to append to (accretion model).",
+    )
+    parser.add_argument(
+        "--document-json-out",
+        type=Path,
+        default=None,
+        help="Destination path for the updated ATRIUM Document JSON.",
+    )
+    parser.add_argument(
         "--download-dir",
         type=Path,
         default=None,
@@ -227,7 +240,11 @@ def process_single_file(
     """
     translator.reset_protected_count()
 
-    csv_log_path = output_file.with_name(f"{file_path.name.split('.')[0]}_log.csv")
+    doc_id = file_path.name.split(".")[0]
+    csv_log_path = output_file.with_name(f"{doc_id}_log.csv")
+    paradata_ref = str(Path(_logger.paradata_dir) / f"{_logger._run_id}_{_logger.program}.json")
+
+    doc_json_out = args.document_json_out or output_file.with_name(f"{doc_id}.document.json")
     success = False
 
     with open(csv_log_path, "w", encoding="utf-8", newline="") as csv_file:
@@ -243,32 +260,52 @@ def process_single_file(
         )
 
         try:
-            if args.alto:
-                process_alto_xml(
-                    file_path,
-                    output_file,
-                    translator,
-                    args.source_lang,
-                    args.target_lang,
-                    csv_writer,
-                    identifier,
-                    line_anchors=not args.fast_align,
-                )
-            else:
-                process_metadata_xml(
-                    file_path,
-                    output_file,
-                    xpaths_list,
-                    translator,
-                    args.source_lang,
-                    args.target_lang,
-                    xsd_schema=xsd_schema,
-                    csv_writer=csv_writer,
-                    identifier=identifier,
-                )
+            with DocumentRecord.open(
+                doc_id=doc_id,
+                program="translator",
+                baseline=args.document_json,
+                run_id=_logger._run_id,
+                paradata_ref=paradata_ref,
+            ) as doc:
+                if args.alto:
+                    process_alto_xml(
+                        file_path,
+                        output_file,
+                        translator,
+                        args.source_lang,
+                        args.target_lang,
+                        csv_writer,
+                        identifier,
+                        line_anchors=not args.fast_align,
+                        doc=doc,
+                    )
+                else:
+                    process_metadata_xml(
+                        file_path,
+                        output_file,
+                        xpaths_list,
+                        translator,
+                        args.source_lang,
+                        args.target_lang,
+                        xsd_schema=xsd_schema,
+                        csv_writer=csv_writer,
+                        identifier=identifier,
+                        doc=doc,
+                    )
+
+                # Append derived step outputs and licenses to the accretion model
+                doc.add_derived_from("translated_xml", output_file.name)
+
+                # Known wart: retrieve the license detail using the private logger call
+                if hasattr(_logger, "_license_block"):
+                    doc.add_license_detail(_logger._license_block())
+
+                doc.finalize(str(doc_json_out))
 
             _logger.log_success("xml")
             _logger.log_success("csv")
+            if args.document_json or args.document_json_out:
+                _logger.log_success("json")
             success = True
 
         except Exception as e:
@@ -303,7 +340,7 @@ def main():
         program="translator",
         config=_build_paradata_config(args, config),
         paradata_dir=str(out_dir / "paradata"),
-        output_types=["xml", "csv"],
+        output_types=["xml", "csv", "json"],
     ) as _logger:
         if not args.alto and not args.xpaths:
             print("[ERROR] Specify either the --alto flag or provide --xpaths / 'fields' in config.")
