@@ -172,7 +172,7 @@ def process_metadata_xml(
                             update_payload[key_field] = entity[key_field]
 
                     updated_entities.append(update_payload)
-                doc.merge_block("entities", updated_entities)
+                doc.merge_block("entities", updated_entities, own_fields=[f"translation_{tgt_lang}"])
 
         if xsd_schema:
             print(f"[INFO] Validating {output_path.name} against XSD …")
@@ -509,7 +509,7 @@ def process_alto_xml(
                             update_payload[key_field] = entity[key_field]
 
                     updated_entities.append(update_payload)
-                doc.merge_block("entities", updated_entities)
+                doc.merge_block("entities", updated_entities, own_fields=[f"translation_{tgt_lang}"])
 
         tree.write(str(output_path), encoding="utf-8", xml_declaration=True)
         print(f"[SUCCESS] Saved ALTO translation → {output_path}")

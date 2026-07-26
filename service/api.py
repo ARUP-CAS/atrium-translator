@@ -189,7 +189,8 @@ async def translate_document(
             xml_bytes = fh.read()
 
         json_bytes = None
-        if doc_json_out_path.exists():
+        # Only attach the multipart JSON response if the client opted into the flow
+        if document_json and doc_json_out_path.exists():
             with open(doc_json_out_path, "rb") as fh:
                 json_bytes = fh.read()
 
