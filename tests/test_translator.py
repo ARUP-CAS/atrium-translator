@@ -34,16 +34,10 @@ def test_post_with_retry_success_after_429(mock_post):
 @patch("processors.translator.requests.post")
 def test_post_with_retry_max_retries_exceeded(mock_post):
     """Verify the translator gives up after max retries on persistent 5xx errors."""
-    # In tests/test_translator.py (around line 43)
-
     mock_resp_500 = MagicMock()
     mock_resp_500.status_code = 500
     mock_resp_500.raise_for_status.side_effect = RequestException("500 Internal Server Error")
 
-    # DELETE THIS LINE:
-    # mock_post.side_effect = [mock_resp_500] * 5
-
-    # ADD THIS LINE INSTEAD:
     mock_post.return_value = mock_resp_500
 
     translator = LindatTranslator(vocab_path=None)
@@ -53,7 +47,7 @@ def test_post_with_retry_max_retries_exceeded(mock_post):
     with pytest.raises(TranslationError):
         translator._post_with_retry("http://fake-api.cz", data={"text": "test"})
 
-    assert mock_post.call_count == 5  # 1 initial attempt + 4 retries
+    assert mock_post.call_count == 11  # 1 initial attempt + 10 default retries
 
 
 def test_homonym_single_word_lemma_protection():

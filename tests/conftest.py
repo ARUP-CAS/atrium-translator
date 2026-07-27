@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from atrium_test_support import REPO_ROOT, FakeTranslator
+
+
+@pytest.fixture(autouse=True)
+def disable_sleep():
+    """Globally disable time.sleep() for all tests to prevent slow backoffs."""
+    # Note: If your http_retry.py uses `from time import sleep`,
+    # you may need to patch 'processors.http_retry.sleep' instead.
+    with patch("time.sleep", return_value=None):
+        yield
 
 
 def _build_translator(prefix: str, suffix: str = "") -> MagicMock:

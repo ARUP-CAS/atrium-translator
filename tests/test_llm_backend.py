@@ -227,11 +227,12 @@ def test_retry_then_success(mock_post):
 def test_persistent_5xx_raises_translation_error(mock_post):
     mock_post.return_value = _resp(503)
     b = _backend()
-    b._max_retries = 2
     b._backoff_base_s = 0.0
+
     with pytest.raises(TranslationError):
         b.translate("Ahoj", "cs", "en")
-    assert mock_post.call_count == 3  # 1 + 2 retries
+
+    assert mock_post.call_count == 11  # 1 initial attempt + 10 default retries
 
 
 @patch("processors.llm_translator.requests.post")

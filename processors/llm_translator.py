@@ -240,7 +240,7 @@ class LLMTranslator:
         url = f"{self.base_url}/chat/completions"
         response = request_with_retry(
             lambda: requests.post(url, json=payload, headers=self._headers(), timeout=120),
-            max_retries=self._max_retries,  # <-- ADD THIS LINE
+            max_retries=self._max_retries,
             backoff_base_s=self._backoff_base_s,
             throttle=self._throttle,
             error_cls=TranslationError,
