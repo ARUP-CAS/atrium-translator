@@ -34,12 +34,17 @@ def test_post_with_retry_success_after_429(mock_post):
 @patch("processors.translator.requests.post")
 def test_post_with_retry_max_retries_exceeded(mock_post):
     """Verify the translator gives up after max retries on persistent 5xx errors."""
+    # In tests/test_translator.py (around line 43)
+
     mock_resp_500 = MagicMock()
     mock_resp_500.status_code = 500
     mock_resp_500.raise_for_status.side_effect = RequestException("500 Internal Server Error")
 
-    # mock_post.side_effect = [mock_resp_500] * 5  # Persistently fail
-    mock_post.return_value = mock_resp_500  # Persistently fail
+    # DELETE THIS LINE:
+    # mock_post.side_effect = [mock_resp_500] * 5
+
+    # ADD THIS LINE INSTEAD:
+    mock_post.return_value = mock_resp_500
 
     translator = LindatTranslator(vocab_path=None)
     translator._throttle = MagicMock()
