@@ -238,9 +238,10 @@ class LLMTranslator:
             "max_tokens": self.max_tokens,
         }
         url = f"{self.base_url}/chat/completions"
+        # In processors/llm_translator.py
         response = request_with_retry(
             lambda: requests.post(url, json=payload, headers=self._headers(), timeout=120),
-            max_retries=self._max_retries,
+            max_retries=self._max_retries,  # Add this missing argument
             backoff_base_s=self._backoff_base_s,
             throttle=self._throttle,
             error_cls=TranslationError,
