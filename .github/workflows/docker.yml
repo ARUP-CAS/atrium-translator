@@ -8,8 +8,16 @@ on:
     branches: [ test, master ]
 
 permissions:
+  # security-events:write is required because docker-tool.reusable.yml's
+  # build-and-push job uploads the post-publish Trivy SARIF. A reusable
+  # workflow's permissions are CAPPED BY THIS BLOCK, so omitting it makes GitHub
+  # reject the whole file at parse time with "requesting 'security-events:
+  # write', but is only allowed 'security-events: none'" — a startup_failure,
+  # not a step failure (#18). This repo sets permissions at WORKFLOW level (no
+  # job-level block), so the grant belongs here.
   contents: read
   packages: write
+  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
