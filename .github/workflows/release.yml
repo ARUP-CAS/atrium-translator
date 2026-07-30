@@ -18,6 +18,7 @@ jobs:
   version-guard:
     name: Verify tag == CITATION.cff == para_config.txt
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - name: Block release on version/tag mismatch
@@ -75,6 +76,7 @@ jobs:
   create-release:
     needs: version-guard
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
