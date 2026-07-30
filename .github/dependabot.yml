@@ -15,6 +15,12 @@ updates:
     schedule:
       interval: "weekly"
     target-branch: "test"
+    # Grouped to match the github-actions entry above and the other four repos —
+    # this was the last ungrouped ecosystem in the ecosystem (#18).
+    groups:
+      pip-deps:
+        patterns:
+          - "*"
     ignore:
       - dependency-name: "torch"
       - dependency-name: "torchvision"
