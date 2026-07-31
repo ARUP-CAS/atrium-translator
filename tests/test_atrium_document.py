@@ -6,6 +6,7 @@ contract (six rules) for the translator integration.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -133,3 +134,85 @@ def test_rule_6_unknown_blocks_preserved(tmp_path, baseline_json, mock_paradata)
 
     result = json.loads(out_path.read_text(encoding="utf-8"))
     assert result["unknown_future_block"]["key"] == "value"
+
+
+# ── P0.5 regression: process_metadata_xml/process_alto_xml's actual `translations`
+# shape, not just the generic DocumentRecord primitive above ──────────────────────
+
+
+def test_process_metadata_xml_writes_schema_shaped_translations(
+    amcr_xml_file, tmp_path, mock_translator, mock_paradata
+):
+    """
+    The previous implementation wrote `{tgt_lang: "<entire translated corpus text>"}`,
+    which contradicts the schema (`{source_lang, target_lang, backend}`) and duplicates
+    text that already persists via `derived_from.translated_xml`. Also asserts entity
+    translation is NOT attempted — entities[] doesn't exist yet when the translator
+    runs (pc→alto→translate→nlp→llm), so that pass was unreachable dead code.
+    """
+    from utils import process_metadata_xml
+
+    run_id, paradata_ref = mock_paradata
+    out_xml = tmp_path / "out.xml"
+
+    with DocumentRecord.open(
+        doc_id="CTX01", program="translator", baseline=None, run_id=run_id, paradata_ref=paradata_ref
+    ) as doc:
+        process_metadata_xml(
+            amcr_xml_file,
+            out_xml,
+            ["//amcr:amcr/amcr:dokument/amcr:popis"],
+            mock_translator,
+            "cs",
+            "en",
+            doc=doc,
+            backend="lindat",
+        )
+        doc.finalize(str(tmp_path / "CTX01.document.json"))
+
+    result = json.loads((tmp_path / "CTX01.document.json").read_text(encoding="utf-8"))
+    assert result["translations"] == {"source_lang": "cs", "target_lang": "en", "backend": "lindat"}
+
+
+def test_process_alto_xml_writes_schema_shaped_translations(alto_xml_file, tmp_path, mock_translator, mock_paradata):
+    from utils import process_alto_xml
+
+    run_id, paradata_ref = mock_paradata
+    out_xml = tmp_path / "out.alto.xml"
+
+    with DocumentRecord.open(
+        doc_id="CTX02", program="translator", baseline=None, run_id=run_id, paradata_ref=paradata_ref
+    ) as doc:
+        process_alto_xml(alto_xml_file, out_xml, mock_translator, "cs", "en", doc=doc, backend="ctranslate2")
+        doc.finalize(str(tmp_path / "CTX02.document.json"))
+
+    result = json.loads((tmp_path / "CTX02.document.json").read_text(encoding="utf-8"))
+    assert result["translations"] == {"source_lang": "cs", "target_lang": "en", "backend": "ctranslate2"}
+
+
+def test_translations_output_validates_against_schema(amcr_xml_file, tmp_path, mock_translator, mock_paradata):
+    jsonschema = pytest.importorskip("jsonschema")
+    from utils import process_metadata_xml
+
+    run_id, paradata_ref = mock_paradata
+    out_xml = tmp_path / "out.xml"
+
+    with DocumentRecord.open(
+        doc_id="CTX03", program="translator", baseline=None, run_id=run_id, paradata_ref=paradata_ref
+    ) as doc:
+        process_metadata_xml(
+            amcr_xml_file,
+            out_xml,
+            ["//amcr:amcr/amcr:dokument/amcr:popis"],
+            mock_translator,
+            "cs",
+            "en",
+            doc=doc,
+        )
+        doc.finalize(str(tmp_path / "CTX03.document.json"))
+
+    result = json.loads((tmp_path / "CTX03.document.json").read_text(encoding="utf-8"))
+
+    schema_path = Path(__file__).resolve().parent.parent / "atrium_document.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator(schema).validate(result)

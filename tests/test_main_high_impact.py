@@ -28,6 +28,7 @@ class FakeParadataLogger:
         self.paradata_dir = paradata_dir
         self.output_types = output_types or []
         self._run_id = "test-run"
+        self.run_id = "test-run"  # mirrors ParadataLogger's public accessor
         self.successes: list[str] = []
         self.components: list[str] = []
         self.skipped: list[tuple[str, str]] = []
@@ -40,6 +41,9 @@ class FakeParadataLogger:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         return False
+
+    def get_license_block(self) -> dict:
+        return {"effective_license": "CC BY-NC 4.0", "effective_license_url": "", "components": []}
 
     def log_success(
         self,
