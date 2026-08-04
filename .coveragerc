@@ -5,6 +5,9 @@ omit =
     setup/*
     service/*
     *paradata.py
+    check_version.py
+    eval/*
+    atrium_test_support.py
 
 [report]
 # Ratchet: set below the measured fast-lane baseline (2026-07-16, issue atrium-project#10)
