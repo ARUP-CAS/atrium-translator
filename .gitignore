@@ -15,3 +15,8 @@ downloaded_inputs/
 # Added for atrium-project#10 — nlp-enrich had the identical gap.
 __pycache__/
 *.py[cod]
+
+# Coverage data artifact written by `pytest --cov`; never source.
+# Swept into a commit by `git add -A` during atrium-project#10 Phase 6.
+.coverage
+.coverage.*

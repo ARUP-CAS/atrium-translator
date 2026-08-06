@@ -10,6 +10,9 @@ omit =
     atrium_test_support.py
 
 [report]
-# Ratchet: set below the measured fast-lane baseline (2026-07-16, issue atrium-project#10)
-fail_under = 70
+# Ratchet: set ~2 points below the measured fast-lane baseline of 83.07%
+# (2026-08-06, issue atrium-project#10 Phase 6). Raised from 70 — the suites grew
+# substantially in the 08-05/06 round, and a floor left far below the real number
+# stops being a ratchet: coverage can fall by twenty points and still pass.
+fail_under = 81
 show_missing = True
