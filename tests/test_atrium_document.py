@@ -365,6 +365,107 @@ def test_direct_utils_callers_still_get_a_canonical_csv_doc_id(tmp_path, mock_tr
     assert rows and all(row[0] == MULTI_DOT_DOC_ID for row in rows)
 
 
+# ── D1/D3 (atrium-project#10): the doc_id a PAGE-SPLIT input must NOT fork ──
+#
+# The tests above pin the derivation against a multi-dot document NAME. This pair pins the
+# other half of the same contract — the one the E2E caught and no unit test could
+# (hub run 31076188660, `assert_doc_id_stable`):
+#
+#     "work/doc_json/2_alto.json":     "CTX000000003"
+#     "work/doc_json/3_translate.json": "CTX000000003-1"   ← this repo
+#     "work/doc_json/4_nlp.json":      "CTX000000003"
+#
+# The translator is the one stage whose input is never the original document: alto-postprocess
+# hands it `PAGE_ALTO/<doc>/<doc>-1.alto.xml`, so canonical_doc_id() answers `<doc>-1` — right
+# about the FILE, wrong about the RECORD. Nothing was mis-derived and nothing was dropped; the
+# record simply arrived under a key no other stage would look up again.
+
+PAGE_SPLIT_DOC_ID = "CTX000000003"
+PAGE_SPLIT_FILE_KEY = f"{PAGE_SPLIT_DOC_ID}-1"
+
+
+def _page_split_baseline(tmp_path):
+    """What alto-postprocess hands the translator: a record already keyed on the DOCUMENT."""
+    baseline = tmp_path / f"{PAGE_SPLIT_DOC_ID}.document.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "record_type": "atrium-document",
+                "doc_id": PAGE_SPLIT_DOC_ID,
+                "pages": [{"page": "1", "quality_score": 0.98}],
+                "page_categories": [{"page": "1", "category": "TEXT"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return baseline
+
+
+def test_page_split_input_inherits_the_documents_doc_id(tmp_path, mock_translator):
+    """A page of a document accretes onto the DOCUMENT's record, under the document's key."""
+    input_file = tmp_path / f"{PAGE_SPLIT_FILE_KEY}.alto.xml"
+    input_file.write_text(_alto_xml_source(), encoding="utf-8")
+
+    success, out_dir = _run_process_single_file(
+        tmp_path, input_file, mock_translator, baseline=_page_split_baseline(tmp_path)
+    )
+    assert success
+
+    record_path = out_dir / f"{PAGE_SPLIT_DOC_ID}.document.json"
+    assert record_path.exists(), f"record written under a forked doc_id: {sorted(p.name for p in out_dir.iterdir())}"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["doc_id"] == PAGE_SPLIT_DOC_ID
+    # Upstream blocks accreted under the same key, which is the whole point of not re-keying.
+    assert record["page_categories"][0]["category"] == "TEXT"
+    assert record["translations"]["target_lang"] == "en"
+
+    # The CSV log stays per-FILE — it holds per-line rows, so page 2 of a batch must not
+    # truncate page 1's log — while its `file` column names the document the record does.
+    csv_log = out_dir / f"{PAGE_SPLIT_FILE_KEY}_log.csv"
+    assert csv_log.exists(), sorted(p.name for p in out_dir.iterdir())
+    rows = [line.split(",") for line in csv_log.read_text(encoding="utf-8").splitlines()[1:]]
+    assert rows and all(row[0] == PAGE_SPLIT_DOC_ID for row in rows)
+
+
+def test_page_split_input_without_a_baseline_keeps_the_file_key(tmp_path, mock_translator):
+    """Rule 3: a standalone run has no document context, so the filename is all there is.
+
+    The repair is "inherit rather than re-derive", NOT "strip a trailing `-<n>`" — `sbn.2019-1`
+    is a legal document name, so a filename rule cannot tell a page label from a document's own
+    last segment. With no baseline there is nothing to inherit and the file key stands.
+    """
+    input_file = tmp_path / f"{PAGE_SPLIT_FILE_KEY}.alto.xml"
+    input_file.write_text(_alto_xml_source(), encoding="utf-8")
+
+    success, out_dir = _run_process_single_file(tmp_path, input_file, mock_translator)
+    assert success
+
+    record = json.loads((out_dir / f"{PAGE_SPLIT_FILE_KEY}.document.json").read_text(encoding="utf-8"))
+    assert record["doc_id"] == PAGE_SPLIT_FILE_KEY
+
+
+def test_documentrecord_refuses_to_rekey_an_inherited_record(tmp_path, capsys):
+    """The shared module's half of the fix, which holds for every tool, not just this one.
+
+    `DocumentRecord.__init__` used to do a bare `self._data["doc_id"] = doc_id` — the caller's
+    guess overwrote the key the deep-copied baseline arrived with, no comparison made. So a
+    tool could not opt out of forking by being careful at ONE call site; the last write always
+    won. Now the baseline wins and the divergence is reported.
+    """
+    baseline = _page_split_baseline(tmp_path)
+
+    with DocumentRecord.open(doc_id=PAGE_SPLIT_FILE_KEY, program="translator", baseline=baseline) as doc:
+        assert doc.doc_id == PAGE_SPLIT_DOC_ID
+        assert doc.derived_doc_id == PAGE_SPLIT_FILE_KEY  # still available for per-file naming
+        doc.set_block("translations", {"source_lang": "cs", "target_lang": "en", "backend": "lindat"})
+        out_path = doc.finalize(str(tmp_path / "out.json"))
+
+    assert json.loads(open(out_path, encoding="utf-8").read())["doc_id"] == PAGE_SPLIT_DOC_ID
+    # Visible, and never fatal: the record that came out is the correct one.
+    assert PAGE_SPLIT_FILE_KEY in capsys.readouterr().err
+
+
 # ── D4 (atrium-project#10): the Layer D validation gate, wired at main.py's chokepoint ──
 
 

@@ -132,6 +132,41 @@ def _baseline_is_invalid(baseline: Path | None) -> bool:
     return False
 
 
+def record_doc_id(file_path: Path, baseline: Path | None) -> str:
+    """The doc_id the RECORD is keyed on — inherited from the baseline, not guessed (D1/D3).
+
+    The translator is the one stage whose input is never the original document. ALTO
+    postprocess splits pages out as ``PAGE_ALTO/<doc>/<doc>-1.alto.xml`` and that is what the
+    pipeline hands us, so ``canonical_doc_id()`` — which strips pipeline SUFFIXES and knows
+    nothing about page labels — correctly answers ``<doc>-1``. Correct for the file; wrong for
+    the record, and the E2E gate is where that showed up (hub run 31076188660): stage 3 wrote
+    ``CTX000000003-1`` into a chain whose other four stages all said ``CTX000000003``. Every
+    upstream block was still carried through, but under a key nothing downstream would ever
+    look up again — an orphan, which is exactly what `assert_doc_id_stable()` exists to catch.
+
+    Stripping a trailing ``-<n>`` here would be the wrong repair: ``sbn.2019-1`` is a legal
+    document name, so no filename rule can tell a page label from the document's own last
+    segment. The baseline does not have to guess — the originator already wrote the answer
+    into it. So: inherit when there is a baseline, fall back to `canonical_doc_id()` on the
+    filename when there is not (rule 3, a standalone run has no document context to inherit).
+
+    ``DocumentRecord`` applies the same rule to the record it writes, so this function is not
+    what keeps the id honest — it is what keeps the CSV log's `file` column and the paradata
+    key, both computed OUTSIDE the record, agreeing with what lands inside it.
+
+    An unreadable or id-less baseline falls back to the filename rather than raising:
+    ``DocumentRecord.open()`` reports that case a few lines later, with the right message.
+    """
+    derived = canonical_doc_id(file_path)
+    if not baseline or not Path(baseline).exists():
+        return derived
+    try:
+        inherited = canonical_doc_id(load_document(str(baseline)))
+    except Exception:
+        return derived
+    return inherited or derived
+
+
 def _validate_own_output(doc: DocumentRecord, baseline_was_invalid: bool) -> None:
     """The Layer D gate on the translator's own output, called before ``finalize()`` (D4).
 
@@ -340,11 +375,20 @@ def process_single_file(
     # The old `file_path.name.split(".")[0]` agreed with canonical_doc_id() only by luck of
     # the sample naming convention — a doc_id with an embedded dot (`CTX01.v2.alto.xml`)
     # truncated to `CTX01` here while every other tool kept `CTX01.v2`, forking this repo's
-    # record away from the rest of the pipeline for the same physical document. This value is
-    # also threaded into the CSV log's `file` column (see process_*_xml's `doc_id=`) so the
-    # record and the log can never disagree about which document they describe.
-    doc_id = canonical_doc_id(file_path)
-    csv_log_path = output_file.with_name(f"{doc_id}_log.csv")
+    # record away from the rest of the pipeline for the same physical document.
+    #
+    # `file_key` names what THIS INVOCATION READ; `doc_id` names the DOCUMENT the record is
+    # keyed on, and the two are not the same thing whenever the input is a page split out of
+    # a multi-page original — which, in the ecosystem pipeline, is always (see
+    # record_doc_id). The CSV log keeps the per-FILE name because it holds per-line rows and
+    # a document-level name would make page 2 of a batch truncate page 1's log. The record
+    # takes `doc_id` everywhere: in its key, in its default filename (rule 1's
+    # `<doc_id>.document.json`, and what DocumentRecord.finalize() would pick on its own), in
+    # the log's `file` column, and in the paradata key — a record whose NAME disagreed with
+    # the id INSIDE it is the same class of defect as the fork this derivation now avoids.
+    file_key = canonical_doc_id(file_path)
+    doc_id = record_doc_id(file_path, args.document_json)
+    csv_log_path = output_file.with_name(f"{file_key}_log.csv")
     paradata_ref = str(Path(_logger.paradata_dir) / f"{_logger.run_id}_{_logger.program}.json")
 
     doc_json_out = args.document_json_out or output_file.with_name(f"{doc_id}.document.json")
@@ -566,7 +610,9 @@ def main():
             if translator.vocabulary:
                 # D3: the paradata key must be the same doc_id the record and the CSV log
                 # use, or `vocabulary_protected_terms` cannot be joined back to a document.
-                doc_name = canonical_doc_id(file_path)
+                # Same derivation as process_single_file's, baseline included — keyed on the
+                # page a document was split into, this map joins to nothing.
+                doc_name = record_doc_id(file_path, args.document_json)
                 protected_by_doc[doc_name] = protected
                 if getattr(translator, "supports_glossary", False):
                     print(f"[INFO] Prompt glossary: {protected} term(s) applied in {file_path.name}")
