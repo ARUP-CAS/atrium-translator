@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 
+from atrium_document import canonical_doc_id
 from atrium_paradata import ParadataLogger
 from main import process_single_file
 from processors.backend import get_backend
@@ -106,7 +107,14 @@ async def translate_document(
         input_path.write_bytes(content)
 
         doc_json_path = None
-        doc_json_out_path = work_dir / f"{file.filename.split('.')[0]}.document.json"
+        # D3 (atrium-project#10): the same derivation process_single_file() uses, so the
+        # filename this endpoint promises the client and the doc_id the record is keyed on
+        # cannot diverge. `filename.split('.')[0]` truncated at the FIRST dot, so an upload
+        # named `CTX01.v2.alto.xml` was answered with `CTX01.document.json` while the record
+        # inside it said `CTX01.v2` — and the accreted record was then looked up under the
+        # wrong id by the next stage. Original case is preserved deliberately: nothing else in
+        # the pipeline lower-cases a doc_id.
+        doc_json_out_path = work_dir / f"{canonical_doc_id(file.filename)}.document.json"
 
         if document_json:
             doc_json_path = work_dir / (document_json.filename or "baseline.json")
@@ -114,6 +122,18 @@ async def translate_document(
 
         output_dir = work_dir / "output"
         output_dir.mkdir()
+
+        # The backend that actually warmed up in lifespan(), read once and threaded into BOTH
+        # the args Namespace and the paradata config below.
+        #
+        # `backend=` is not optional: process_single_file() passes `args.backend` down to
+        # process_alto_xml/process_metadata_xml, which stamp it into `translations.backend`.
+        # Without the field, the very first REAL request raised AttributeError inside
+        # process_single_file's catch-all, which logged a skip and returned success=False —
+        # so the endpoint answered 500 for every upload. Nothing in CI could see it: all
+        # /translate tests mock process_single_file, exactly the blindness that let alto's J1
+        # ship (atrium-project#10 review pass; found while landing D3/D4).
+        backend_name = models["translator"].name
 
         args = argparse.Namespace(
             source_lang=source_lang,
@@ -123,6 +143,7 @@ async def translate_document(
             xsd=None,
             document_json=doc_json_path,
             document_json_out=doc_json_out_path,
+            backend=backend_name,
         )
 
         # ALTO vs standard XML naming preservation
@@ -133,7 +154,6 @@ async def translate_document(
 
         output_path = output_dir / out_filename
 
-        backend_name = models["translator"].name
         para_config = {
             "source_lang": source_lang,
             "target_lang": target_lang,

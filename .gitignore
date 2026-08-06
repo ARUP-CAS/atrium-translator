@@ -9,3 +9,9 @@ data_samples/translated_files/*.xml
 data_samples/translated_files/*.csv
 data_samples/translated_files/paradata/*.json
 downloaded_inputs/
+
+# Python bytecode. Recursive (not root-anchored): running the suite otherwise
+# litters every package dir and a `git add -A` silently commits it.
+# Added for atrium-project#10 — nlp-enrich had the identical gap.
+__pycache__/
+*.py[cod]
