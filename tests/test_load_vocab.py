@@ -382,3 +382,60 @@ class TestHarvestViaSearchEdges:
         monkeypatch.setattr(load_vocab, "_gql", lambda *a, **k: {"search": []})
         vocab = load_vocab._harvest_via_search(MagicMock(), self._search_field(["limit"]), self._all_types())
         assert vocab == {}
+
+
+# ── The CLI README.md has documented since v0.4.0 ────────────────────────────
+#
+# load_vocab.py used to end with a comment stating that the
+# `--skip-teater/--out/--delay` entry point the README documents "has never
+# existed here". The commands in README's "Harvesting the Vocabulary" section
+# were therefore unrunnable. These tests pin the documented surface so the
+# documentation cannot drift back out of truth.
+
+
+def test_cli_writes_the_merged_csv(tmp_path, monkeypatch):
+    out = tmp_path / "vocab.csv"
+    monkeypatch.setattr(
+        load_vocab, "harvest_amcr_records", lambda delay=0.3: {"mohyla": load_vocab.VocabEntry("barrow")}
+    )
+    monkeypatch.setattr(load_vocab, "harvest_teater_records", lambda: {"sidliste": load_vocab.VocabEntry("settlement")})
+
+    assert load_vocab.main(["--out", str(out)]) == 0
+
+    body = out.read_text(encoding="utf-8")
+    assert "mohyla" in body and "sidliste" in body
+
+
+def test_cli_can_skip_a_source(tmp_path, monkeypatch):
+    out = tmp_path / "vocab.csv"
+    called = {"teater": False}
+
+    def _teater():
+        called["teater"] = True
+        return {}
+
+    monkeypatch.setattr(
+        load_vocab, "harvest_amcr_records", lambda delay=0.3: {"mohyla": load_vocab.VocabEntry("barrow")}
+    )
+    monkeypatch.setattr(load_vocab, "harvest_teater_records", _teater)
+
+    assert load_vocab.main(["--out", str(out), "--skip-teater"]) == 0
+    assert called["teater"] is False, "--skip-teater still harvested TEATER"
+
+
+def test_cli_refuses_to_skip_everything():
+    with pytest.raises(SystemExit) as excinfo:
+        load_vocab.main(["--skip-amcr", "--skip-teater"])
+    assert excinfo.value.code != 0
+
+
+def test_cli_reports_an_empty_harvest_without_writing(tmp_path, monkeypatch):
+    """An empty harvest must not silently truncate an existing vocabulary."""
+    out = tmp_path / "vocab.csv"
+    out.write_text("source_lemma,target_translation,source,source_id,uri\nmohyla,barrow,,,\n", encoding="utf-8")
+
+    monkeypatch.setattr(load_vocab, "harvest_amcr_records", lambda delay=0.3: {})
+    monkeypatch.setattr(load_vocab, "harvest_teater_records", dict)
+
+    assert load_vocab.main(["--out", str(out)]) == 2
+    assert "mohyla" in out.read_text(encoding="utf-8"), "an empty harvest overwrote the existing CSV"

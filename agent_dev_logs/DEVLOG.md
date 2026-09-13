@@ -1,5 +1,6 @@
 # 📓 atrium-translator — agent_dev_logs/DEVLOG.md (timeline index)
-> _XML in-place translation. 1 open issue (#4). `test`==`master` HEAD `dae197a` (2026-09-03) · **v0.10.5**._
+> _XML in-place translation. 1 open issue (#4). `test` HEAD `b4fac57` (2026-09-13) · **v0.10.5**, pre-production
+> hardening staged for the next tag. Twelve-factor detail: `digests/12factor.digest.md` · `plans/12factor.plan.md`._
 > _Per-issue detail: `digests/4.digest.md` · `plans/4.plan.md` · `issues/` export (source of truth). Cross-repo/hub
 > history lives in `ufal/atrium-project/agent_dev_logs/DEVLOG.md` (deduplicated out of this file)._
 
@@ -115,8 +116,64 @@ tracking forward: the still-unrun `eval/bakeoff.py` comparison (#4's actual rema
 "`backend`-less `/translate` → HTTP 500" gap that `.coveragerc` now measures but which no live-backend integration
 test yet catches.
 
+## 2026-09-07 – 2026-09-12: the twelve-factor sub-issues land, none of them visible on GitHub
+
+Five of `ufal/atrium-project#53`'s sub-issues were implemented here in six days, straight onto `test` — no PR, so
+nothing auto-closed or referenced them and every one still reads `open`. Recorded here because the issue tracker
+does not record it. Full audit in `digests/12factor.digest.md`.
+
+* **`e731e55` (09-07) — factor IX, hub #55.** The `api` Dockerfile stage, so a runnable API image exists to publish
+at all: before this the service was reachable only through a compose `entrypoint:` override on the batch image.
+`STOPSIGNAL SIGTERM`, `HEALTHCHECK` against the vendored `service/healthcheck.py`, and `serve_lifecycle`'s drain —
+`/ready` flips to 503 the instant SIGTERM arrives, in-flight translation finishes before `models.clear()`.
+* **`b0116d9`/`30d986e` (09-09) — hub #54.** `atrium_rocrate.py` vendored and brought under `para-drift`.
+* **`6e77466` (09-11) — factor VII, hub #58.** `$PORT` honoured. The entrypoint baked `--port 8000` into an
+exec-form array where no shell exists to expand a variable, while the manifest handed to ARÚP/ARÚB declares
+`env: PORT` and `healthcheck.py` already read it — so setting `PORT` moved the *probe* and not the listener, and
+the container reported unhealthy forever. `ENTRYPOINT ["python", "-m", "service.api"]` with `HOST`/`PORT`/`RELOAD`/
+`GRACEFUL_SHUTDOWN_S` read in `__main__`. `-m` and not a script path: a script launch puts `sys.path[0]` at
+`/app/service`, and `from main import ...` then fails before the app is built.
+* **`ca1bd7d` (09-11) — factor IV, hub #63.** `TRANSLATION_URL` (with `LINDAT_BASE_URL` as an alias) and
+`UDPIPE_URL` resolved at **construction**, not import — which is why the integration lane added later needs no
+`importlib.reload`. `service/api.py` reports the *resolved* endpoint in paradata rather than a literal.
+* **`d8155b7` (09-11) — factor III, hub #60.** The first `.env.example`.
+* **`8aeac5f`..`8ed9fc8` (09-12) — factor XI, hub #61.** The logging contract: one `basicConfig` in `__main__`,
+stdout, `LOG_LEVEL`, and the vendored `tests/test_logging_contract.py` guarding it by AST rather than at runtime.
+
+## 2026-09-13: pre-production hardening
+
+Prompted by a production-readiness review rather than by a filed issue. Five defects that the test strategy could
+not see, because each lived in a place the suite was structurally not looking at; each fix was confirmed by
+reintroducing the defect and watching the new guard go red. Detail and evidence in `digests/12factor.digest.md`.
+
+* **The retry policy was not configuration.** `http_retry.py` clamped its own arguments *upward*
+(`max_retries = max(10, max_retries)`), so `LINDAT_MAX_RETRIES`, `LINDAT_BACKOFF_BASE_S` and their `LLM_*` twins
+were read and discarded below the floor — factor III, in the code that `.env.example` had just documented. The
+effective policy was 11 attempts backing off 2+4+…+1024 = **2046 s for one failing chunk**, which no `/translate`
+could survive against `GRACEFUL_SHUTDOWN_S=20`: the drain contract #55 had just built was unreachable in the
+failure case it exists for. `test_translator.py` and `test_llm_backend.py` had both been updated to assert the
+clamped 11 and to call it "10 default retries"; the declared default was always 4.
+* **`/translate` read the whole upload before checking its size**, so the 413 was unreachable for exactly the
+inputs it existed to refuse. Now read in bounded chunks, with a `Content-Length` envelope pre-check.
+* **The batch CLI always exited 0** — every failure path was a bare `return`. A Kubernetes `Job` reported success
+for a run that translated nothing. Now `0`/`1`/`2`/`3`.
+* **A failed FastText load was swallowed**, after which `detect()` answered `("en", 0.0)` for every document while
+the service reported itself healthy — the failure mode of an egress-restricted cluster specifically. Now recorded,
+logged once, and reported by `/health?deep=true`. Declared rather than fatal, since a deployment that always passes
+`--source_lang` never consults it.
+* **The release zip could not start.** It omitted `atrium_document.py` and `service/atrium_service.py`, both
+imported by the entry points — `ModuleNotFoundError` on the primary download path for anyone not using the
+container (factor V, in the part #62 did not reach).
+
+Also: the ecosystem's last 3.12 CI lane moved to 3.11 (**hub #64** — grepping `python-version` across all six repos
+now returns 3.11 and nothing else); `.env` actually reaches the container (`env_file`, verified by rendering
+`docker compose config` — the previous file silently dropped `LOG_LEVEL`, `ALLOWED_ORIGINS` and `MAX_UPLOAD_MB`);
+`tests/integration/` closes the live-backend gap `scheduled-smoke.yml` had been naming in its own docstring since
+August; and the README finally documents Docker, the API, the environment and deployment, having contained none of
+them.
+
 ---
 
-*Timeline index refreshed 2026-09-07 against live `test`/`master` HEAD, the `CONTRIBUTING.md` changelog table, and
-open-issue state via the GitHub API. Nothing removed from the issue itself (per hub #29); this file is a derived
-reading aid in `agent_dev_logs/`.*
+*Timeline index refreshed 2026-09-13 against live `test` HEAD. Entries through 2026-09-07 were verified against the
+`CONTRIBUTING.md` changelog table and open-issue state via the GitHub API. Nothing removed from the issue itself
+(per hub #29); this file is a derived reading aid in `agent_dev_logs/`.*

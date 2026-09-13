@@ -17,3 +17,9 @@ huggingface-hub
 jsonschema
 # API meta-contract test deps (issue #32).
 openapi-spec-validator
+# tests/test_release_bundle.py parses .github/workflows/release.yml to check the
+# published artifact against the entry points' real import closure. Declared
+# explicitly for the same reason jsonschema is above: PyYAML arrives transitively
+# today (via openapi-spec-validator), and a guard that silently stops running the
+# day that edge disappears is worse than no guard.
+PyYAML

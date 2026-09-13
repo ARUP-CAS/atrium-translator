@@ -35,8 +35,10 @@ token-alignment** step (see [🧠 Logic Overview](#-logic-overview)).
 
 ## 📚 Table of Contents
 
+- [Project Structure & Architecture](#project-structure--architecture)
 - [✨ Features](#-features)
 - [🛠️ Prerequisites](#-prerequisites)
+- [🐳 Docker & Compose](#-docker--compose)
 - [📂 Project Structure](#-project-structure)
 - [💻 Usage](#-usage)
   - [📖 ALTO XML Mode](#-alto-xml-mode)
@@ -45,10 +47,14 @@ token-alignment** step (see [🧠 Logic Overview](#-logic-overview)).
   - [🗂️ Harvesting the Vocabulary](#-harvesting-the-vocabulary)
   - [⚙️ Configuration File Support](#-configuration-file-support)
   - [⚙️ Supported Arguments](#-supported-arguments)
+- [🌐 API Service](#-api-service)
+- [⚙️ Environment Variables](#-environment-variables)
+- [☸️ Deployment](#-deployment)
 - [🧠 Logic Overview](#-logic-overview)
   - [🧩 ALTO Dual-Pass Reconstruction](#-alto-dual-pass-reconstruction)
 - [📊 Translation CSV Logs](#-translation-csv-logs)
 - [🗄️ Paradata JSON Logs](#-paradata-json-logs)
+- [📄 License & Citation](#-license--citation)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ---
@@ -140,36 +146,100 @@ pip install -r requirements.txt
 
 ---
 
+## 🐳 Docker & Compose
+
+Published images, one per entry point. Both are built from the same `Dockerfile`
+and run as a non-root user (`atrium`, uid 10001):
+
+| Image                                      | Stage  | Entry point               | Purpose        |
+|--------------------------------------------|--------|---------------------------|----------------|
+| `ghcr.io/ufal/atrium-translator:<version>` | `base` | `python main.py`          | batch CLI      |
+| `ghcr.io/ufal/atrium-translator:<version>-api` | `api` | `python -m service.api` | HTTP service   |
+
+### Batch translation
+
+```bash
+# ./data/input holds the ALTO XML; results land in ./data/output
+mkdir -p data/input data/output && sudo chown -R 10001 data
+
+docker run --rm -v "$PWD/data:/data" \
+  ghcr.io/ufal/atrium-translator:latest \
+  /data/input --alto --formats alto.xml --target_lang en -o /data/output
+```
+
+> ⚠️ **Create `./data` yourself first.** The container runs as uid 10001, and a
+> bind-mount directory that Docker creates is owned by root — the write to
+> `/data/output` then fails with `EACCES`. The `chown` above is the whole fix.
+
+The batch entry point exits **non-zero** on failure (`1` usage · `2` nothing
+matched the formats · `3` one or more documents failed), so it can be wrapped in
+a cron job or a Kubernetes `Job` and actually be monitored.
+
+### API service
+
+```bash
+docker compose --profile api up -d      # http://localhost:8000
+curl -sf localhost:8000/health
+curl -sf localhost:8000/ready
+```
+
+`docker-compose.yml` defines two services — `translator` (batch) and `api` — and
+both read the repo-root `.env` (see [Environment Variables](#-environment-variables)).
+`PORT` moves the listener, the published port and the container's own
+`HEALTHCHECK` together:
+
+```bash
+PORT=9000 docker compose --profile api up -d
+```
+
+---
+
 ## 📂 Project Structure
 
 ```text
 atrium-translator/
-├── main.py                    # 🚀 Entry point – CLI routing for ALTO vs. XML Metadata processing
+├── main.py                    # 🚀 Batch CLI entry point – ALTO vs. XML Metadata routing
+├── utils.py                   # 🔧 ALTO & XML parsing, dual-pass alignment, CSV logs, XSD validation
 ├── load_vocab.py              # 🗂️ Vocabulary harvester (AMCR OAI-PMH + TEATER GraphQL → CSV)
-├── atrium_paradata.py         # 🗄️ Unified provenance/paradata logger
-├── requirements.txt           # 📦 Python dependencies
-├── config.txt                 # ⚙️ Configuration parameters
+├── config.txt                 # ⚙️ Per-run configuration (paths, languages, formats, backend)
+├── para_config.txt            # 🏷️ Tool version (single source of truth) + component→license table
 ├── amcr-fields.txt            # 📄 Example XPath list for AMCR metadata translation
-├── amcr-inputs.txt            # 📄 List of AMCR metadata input files (XML) to be processed
-├── processors/
-│   ├── __init__.py            # 📦 Package marker
-│   ├── chunking.py            # ✂️ Shared sentence-aware text chunker (priority-ordered)
-│   ├── identifier.py          # 🌍 FastText language identification (ISO 639-3 to 639-1 mapping)
+├── amcr-inputs.txt            # 📄 List of AMCR metadata input URLs to be processed
+├── .env.example               # 🔑 The environment contract — copy to .env
+├── Dockerfile                 # 🐳 Two stages: `base` (batch CLI) and `api` (HTTP service)
+├── docker-compose.yml         # 🐳 Local deployment: `translator` + `api` (profile)
+│
+│   # ── Shared canonical files (vendored from ufal/atrium-project, never edited here) ──
+├── atrium_paradata.py         # 🗄️ Run-level provenance/paradata logger
+├── atrium_document.py         # 📑 Cross-tool ATRIUM Document record (+ .schema.json)
+├── atrium_vocab.py            # 🏷️ SKOS controlled-label registry (+ .schema.json)
+├── atrium_rocrate.py          # 📦 RO-Crate (JSON-LD) export of document records
+├── para_licenses.py           # ⚖️ Effective-license resolution from exercised components
+├── check_version.py           # 🚦 Release gate: tag == CITATION.cff == para_config.txt
+│
+├── processors/                # (namespace package — no __init__.py)
+│   ├── backend.py             # 🔌 TranslationBackend protocol + get_backend() registry
+│   ├── translator.py          # 🔄 LINDAT CUBBITT client + Tag-and-Protect vocabulary
+│   ├── llm_translator.py      # 🤖 OpenAI-compatible LLM backend (prompt glossary, guards)
+│   ├── ct2_translator.py      # 🧪 CTranslate2 self-hosted backend (scaffold, unregistered)
 │   ├── lemmatizer.py          # 🔤 UDPipe-based lemmatizer for vocabulary term matching
-│   └── translator.py          # 🔄 LINDAT API client with Tag-and-Protect vocabulary support
-├── data_samples/
-│   ├── vocabulary.csv         # 📘 Czech→English domain vocabulary (AMCR/TEATER thesaurus terms)
-│   ├── my_documents/          # 📂 Sample input files (ALTO XML and downloaded AMCR metadata XMLs)
-│   │   ├── MTX201501307.alto.xml  # 📎 Sample ALTO XML file for testing
-│   │   └── ...
-│   └── translated_files/      # 📂 Output directory for translated XML files and their CSV logs
-│       ├── MTX201501307_en.alto.xml  # 📎 Translated ALTO XML output file
-│       ├── MTX201501307_log.csv      # 📎 Per-document translation CSV log
-│       └── ...
-├── paradata/
-│   ├── <date>-<time>_translator.json  # 🗄️ Run-level provenance JSON log
-│   └── ...
-└── utils.py                   # 🔧 ALTO & XML metadata parsing, dual-pass alignment, CSV logging, XSD validation
+│   ├── identifier.py          # 🌍 FastText language identification (ISO 639-3 → 639-1)
+│   ├── chunking.py            # ✂️ Shared sentence-aware text chunker (priority-ordered)
+│   ├── http_retry.py          # 🔁 Shared throttle + bounded exponential back-off
+│   └── vocab.py               # 📘 Vocabulary CSV loader
+├── service/                   # 🌐 The HTTP surface — see service/README.md
+│   ├── api.py                 # FastAPI app: /translate, /info, /health, /ready
+│   ├── atrium_service.py      # (canonical) shared meta-contract helpers
+│   ├── healthcheck.py         # (canonical) stdlib-only Docker HEALTHCHECK probe
+│   └── requirements.txt       # Service-only dependencies (fastapi, uvicorn)
+├── tests/                     # 🧪 pytest suite; tests/integration/ is the live-backend lane
+├── eval/                      # 📊 bakeoff.py — backend comparison harness (issue #4)
+├── docs/                      # 📚 translation-backends.md — backend evaluation & design
+├── agent_dev_logs/            # 📓 Derived timeline, per-issue digests and plans
+└── data_samples/
+    ├── vocabulary.csv         # 📘 Czech→English domain vocabulary (AMCR/TEATER terms)
+    ├── my_documents/          # 📂 Sample inputs (ALTO XML, downloaded AMCR metadata)
+    └── translated_files/      # 📂 Sample outputs, CSV logs and paradata/
 ```
 
 ---
@@ -405,6 +475,107 @@ vocabulary = data_samples/vocabulary.csv
 * `--xpaths`: Path to a `.txt` file containing XPaths for XML metadata translation (works with any XML schema).
 * `--xsd`: Optional URL or local path to an XSD file for output validation.
 * `--vocabulary`: Path to a CSV vocabulary file (`source_lemma,target_translation`) to activate Tag-and-Protect term overriding.
+* `--backend`: Translation backend — `lindat` (default, LINDAT CUBBITT) or `openai_compatible` (any OpenAI-compatible LLM API, configured via the `LLM_*` variables). Resolution order: this flag → `translation_backend` in `config.txt` → `TRANSLATION_BACKEND` → `lindat`. See [docs/translation-backends.md](docs/translation-backends.md) 📎.
+* `--fast-align`: ALTO only. Distribute block tokens by source word count instead of translating each line as an anchor — far fewer API calls, slightly coarser line splits.
+* `--document-json`: Optional baseline ATRIUM Document JSON to accrete onto (the cross-tool record passed along the pipeline).
+* `--document-json-out`: Destination path for the updated ATRIUM Document JSON.
+* `--download-dir`: Directory for URL-ingested inputs (default: `<output>/downloaded_inputs`).
+
+**Exit codes** — `0` success · `1` usage or configuration error · `2` no input matched
+the allowed formats · `3` one or more documents failed. Per-document failures are
+logged and the batch continues, but the process still exits `3`, so a `Job` or cron
+wrapper sees them.
+
+---
+
+## 🌐 API Service
+
+The same pipeline behind an HTTP endpoint. Full operator documentation —
+request/response schemas, the error table, shutdown behaviour — is in
+**[service/README.md](service/README.md)** 📎; this is the overview.
+
+```bash
+docker compose --profile api up -d        # or: python -m service.api
+curl -sf -F "file=@page.alto.xml" \
+     "localhost:8000/translate?source_lang=cs&target_lang=en&is_alto=true" \
+     -o page_en.alto.xml
+```
+
+| Method | Path         | Purpose                                                                       |
+|--------|--------------|-------------------------------------------------------------------------------|
+| `POST` | `/translate` | Translate one XML document (multipart upload; returns the rewritten XML)      |
+| `GET`  | `/info`      | Service identity, version, endpoints, limits, available backends              |
+| `GET`  | `/health`    | Liveness — 200 even mid-shutdown. `?deep=true` also checks the backing models |
+| `GET`  | `/ready`     | Readiness — 503 until warm, and 503 the instant `SIGTERM` arrives             |
+| `GET`  | `/docs`      | Swagger UI; machine-readable schema at `/openapi.json`                        |
+
+The service is **stateless**: per-request scratch lives in a `TemporaryDirectory`
+and dies with the request, so replicas scale horizontally with no shared state.
+
+> ⚠️ **There is no authentication or rate limiting.** `/translate` performs
+> unbounded outbound work against a translation backend on behalf of any caller.
+> Deploy it behind your own gateway, or on a trusted network — do not expose it
+> directly to the public internet.
+
+---
+
+## ⚙️ Environment Variables
+
+**[.env.example](.env.example)** 📎 is the contract: every deployment-varying
+variable, with its default and a one-line explanation. Copy it to `.env` and edit.
+Configuration that varies per *run* rather than per *deployment* — input paths,
+formats, vocabulary, XPath targets — lives in [config.txt](config.txt) 📎 instead.
+
+The most commonly changed values:
+
+| Variable              | Default            | Effect                                                        |
+|-----------------------|--------------------|---------------------------------------------------------------|
+| `TRANSLATION_URL`     | LINDAT             | Translation endpoint — point it at a self-hosted service      |
+| `UDPIPE_URL`          | LINDAT             | UDPipe 2 endpoint used for vocabulary lemma matching          |
+| `TRANSLATION_BACKEND` | `lindat`           | `lindat` or `openai_compatible` (then set the `LLM_*` values) |
+| `PORT` / `HOST`       | `8000` / `0.0.0.0` | What the service binds, and what `healthcheck.py` probes      |
+| `LOG_LEVEL`           | `INFO`             | Root logger level; logs go to stdout as an event stream       |
+| `MAX_UPLOAD_MB`       | `50`               | Upload limit, enforced while reading rather than after        |
+| `ALLOWED_ORIGINS`     | `*`                | CORS origins (CSV). Narrow this for a deployment              |
+| `GRACEFUL_SHUTDOWN_S` | `20`               | How long uvicorn waits for in-flight requests on `SIGTERM`    |
+
+**How `.env` reaches the process** — the distinction matters: `docker compose`
+injects it (both services declare `env_file`), but `python -m service.api` and
+`python main.py` do **not** (nothing here calls `load_dotenv`), and neither does
+Kubernetes. Outside a container, export them yourself:
+
+```bash
+set -a; . ./.env; set +a
+```
+
+---
+
+## ☸️ Deployment
+
+The reference Kubernetes manifest and its acceptance runbook live in the hub
+repository, and are shared by all five ATRIUM services:
+
+* **[ufal/atrium-project → docs/k8s_deployment.md](https://github.com/ufal/atrium-project/blob/master/docs/k8s_deployment.md)**
+  — the manifest, the three probes, the port/bind configuration, and a *Known
+  limits* section worth reading before promising anything from it.
+* **[docs/templates/k8s/atrium-service.deployment.yaml](https://github.com/ufal/atrium-project/blob/master/docs/templates/k8s/atrium-service.deployment.yaml)**
+  — the manifest itself. Substitute the image and size `resources.limits.memory`;
+  everything else is identical across the five services by design.
+
+What this image gives an orchestrator:
+
+* `GET /ready` for `readinessProbe` and `startupProbe`, `GET /health` for
+  `livenessProbe` — both declared, and the Dockerfile carries a `HEALTHCHECK`.
+* `STOPSIGNAL SIGTERM`, after which `/ready` flips to 503 at once, new work is
+  refused with 503, and in-flight translation is allowed to finish before the
+  backend is torn down. A clean stop exits **143** (128 + SIGTERM), not 0.
+* One uvicorn process per container and no shared state, so scale out by
+  replica count.
+
+> ⚠️ A single `/translate` call issues one retried backend request per chunk and
+> can legitimately run for minutes. Raise `GRACEFUL_SHUTDOWN_S` **and** the
+> deployment's `terminationGracePeriodSeconds` together for large documents —
+> a request that outlives both is still cut short by `SIGKILL`.
 
 ---
 
@@ -612,9 +783,34 @@ tool version and the component→license table, and resolves the effective licen
 
 ---
 
+## 📄 License & Citation
+
+The **code** is MIT licensed — see [LICENSE](LICENSE) 📎.
+
+The **licence of what it produces is computed per run**, not fixed, because it
+depends on which components a run actually exercised. `lindat_cubbitt` is
+CC BY-NC-SA 4.0 and the FastText language-ID weights are CC BY-NC 4.0, so a
+default run using CUBBITT yields **non-commercial** output. The component→licence
+table is [para_config.txt](para_config.txt) 📎, the resolution lives in
+[para_licenses.py](para_licenses.py) 📎, and the effective result is written into
+every paradata record as `license`, `license_url` and `license_detail`.
+
+> **If you need commercially usable output**, select a permissively licensed
+> backend (`--backend openai_compatible` with a suitable model, or a
+> self-hosted CTranslate2 model) and check the `license_detail` block of the
+> paradata for the run — it records which components were exercised and why the
+> result resolved as it did. See
+> [docs/translation-backends.md](docs/translation-backends.md) 📎 for the
+> licensing matrix.
+
+To cite this tool, use [CITATION.cff](CITATION.cff) 📎 — GitHub renders it as
+*"Cite this repository"* in the sidebar.
+
+---
+
 ## 🙏 Acknowledgements
 
-**For support write to:** lutsai.k@gmail.com responsible for this GitHub repository [^2] 🔗
+**Support & questions:** open an issue on the repository [^2] 🔗, or write to **lutsai@ufal.mff.cuni.cz**.
 
 - **Developed by** UFAL [^3] 👥
 - **Funded by** ATRIUM [^4] 💰
