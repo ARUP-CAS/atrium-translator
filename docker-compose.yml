@@ -1,55 +1,20 @@
+# atrium-translator — local development and single-host deployment.
+#
+# Two services, one per entry point:
+#   translator  → the batch CLI   (Dockerfile `base` stage, ENTRYPOINT python main.py)
+#   api         → the HTTP service (Dockerfile `api` stage,  ENTRYPOINT python -m service.api)
+#
+# There used to be three. `translator-batch` built the same `base` stage as
+# `translator` but without the ATRIUM_RUNNER_* build args, so paradata written by
+# that service recorded no image or ref, and without the hf-cache volume, so it
+# re-downloaded the FastText language-ID model on every run. It was a strictly
+# worse duplicate of the service below and is gone; nothing referenced it by name.
+#
+# For Kubernetes use the reference manifest instead — this file is not it. See
+# ufal/atrium-project docs/k8s_deployment.md and docs/k8s_acceptance_runbook.md.
+
 services:
-  translator-batch:
-    build:
-      context: .
-    image: ufal/atrium-translator:latest
-    environment:
-      # This service had no environment block at all. Its default ENTRYPOINT is
-      # the batch CLI (main.py), which reaches BOTH backing services and records
-      # the resolved translation endpoint in paradata — so it is the one service
-      # here where a missing passthrough also produces a wrong provenance claim.
-      # (atrium-project#63; empty default = "unset", see the api service below.)
-      TRANSLATION_URL: ${TRANSLATION_URL:-}
-      UDPIPE_URL: ${UDPIPE_URL:-}
-    volumes:
-      - ./data:/data
-      - ./config.txt:/app/config.txt:ro
-    # Default ENTRYPOINT runs the batch CLI if invoked without a profile
-  api:
-    # issue #55: builds the Dockerfile's own `api` stage instead of overriding the batch
-    # image's entrypoint here. The old `entrypoint:` line was the ONLY place this
-    # service's start command existed, so no runnable API image was ever published
-    # (nothing to `docker pull` for Kubernetes) and the Dockerfile's HEALTHCHECK /
-    # STOPSIGNAL could not apply to it.
-    build:
-      context: .
-      target: api
-    image: ufal/atrium-translator:latest-api
-    environment:
-      PORT: ${PORT:-8000}
-      # Backing service endpoints (atrium-project#63). Compose injects ONLY what
-      # is listed here, so without these the endpoints are attachable inside the
-      # process and unreachable from outside the container — same shape as PORT
-      # above (atrium-project#58). The empty default keeps the LINDAT literal in
-      # one place: blank means "unset" to every resolver that reads it, and
-      # /translate's paradata then records the endpoint actually used.
-      TRANSLATION_URL: ${TRANSLATION_URL:-}
-      UDPIPE_URL: ${UDPIPE_URL:-}
-    # PORT is passed through so `PORT=9000 docker compose --profile api up` moves the
-    # listener, the published port and the container's own HEALTHCHECK together — the
-    # service reads it in service/api.py's __main__ block and service/healthcheck.py
-    # probes it. (atrium-project#58)
-    ports:
-      - "${PORT:-8000}:${PORT:-8000}"
-    volumes:
-      - ./data:/data
-      - ./config.txt:/app/config.txt:ro
-    profiles: ["api"]
-    # HEALTHCHECK comes from the `api` stage — no override needed. stop_grace_period
-    # raised from Compose's 10s default: the stage allows uvicorn 20s to drain in-flight
-    # requests plus up to 25s in serve_lifecycle, so 10s would SIGKILL mid-drain. Matches
-    # atrium-project/docs/templates/k8s/atrium-service.deployment.yaml's budget.
-    stop_grace_period: 60s
+  # ── Batch CLI ───────────────────────────────────────────────────────────────
   translator:
     image: ghcr.io/ufal/atrium-translator:${ATRIUM_VERSION:-dev}
     build:
@@ -58,19 +23,74 @@ services:
         ATRIUM_RUNNER_IMAGE: ghcr.io/ufal/atrium-translator:${ATRIUM_VERSION:-dev}
         ATRIUM_RUNNER_REPO: https://github.com/ufal/atrium-translator
         ATRIUM_RUNNER_REF: ${ATRIUM_RUNNER_REF:-dev}
+    # The whole environment contract, delivered to the container (see .env.example).
+    # Compose reads the repo-root `.env` for ${VAR} SUBSTITUTION automatically, but
+    # substitution is not injection: without this block a LOG_LEVEL, ALLOWED_ORIGINS
+    # or MAX_UPLOAD_MB written into `.env` was silently never seen by the process,
+    # while .env.example's own header said compose picked it up. (atrium-project#60)
+    # `required: false` because .env is gitignored, so a fresh clone has none.
+    env_file:
+      - path: .env
+        required: false
     environment:
+      # Values that must also work when EXPORTED IN THE SHELL rather than written
+      # to .env — env_file only ever reads the file. Provenance is stamped at build
+      # time and re-declared here so a `docker compose run` of a prebuilt image
+      # still records it.
       ATRIUM_RUNNER_IMAGE: ghcr.io/ufal/atrium-translator:${ATRIUM_VERSION:-dev}
       ATRIUM_RUNNER_REPO: https://github.com/ufal/atrium-translator
       ATRIUM_RUNNER_REF: ${ATRIUM_RUNNER_REF:-dev}
       HF_HOME: /cache/huggingface
-      # As above (atrium-project#63): the CLI path reaches the same two backing
-      # services, and main.py records the resolved translation endpoint in
-      # paradata, so the batch service needs the passthrough too.
+      # The batch CLI reaches both backing services and records the resolved
+      # translation endpoint in paradata, so a missing passthrough here produces a
+      # wrong provenance claim and not merely a wrong host. (atrium-project#63)
       TRANSLATION_URL: ${TRANSLATION_URL:-}
       UDPIPE_URL: ${UDPIPE_URL:-}
     volumes:
       - ./data:/data
       - hf-cache:/cache/huggingface
       - ./config.txt:/app/config.txt:ro
+    # ⚠️ ./data is created by Docker on first run, owned by root, while the image
+    # runs as uid 10001 (`atrium`) — so the batch CMD's write to /data/output fails
+    # with EACCES until you create it yourself:  mkdir -p data && chown 10001 data
+    # See the README's Docker section.
+
+  # ── HTTP API ────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      target: api
+    image: ghcr.io/ufal/atrium-translator:${ATRIUM_VERSION:-dev}-api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # PORT is listed explicitly because compose itself needs it for the `ports`
+      # mapping below, so it has to resolve from a shell export too and not only
+      # from .env. Setting it moves the listener, the published port AND the
+      # container's own HEALTHCHECK together — service/api.py's __main__ block
+      # binds it and service/healthcheck.py probes it. (atrium-project#58)
+      PORT: ${PORT:-8000}
+      HF_HOME: /cache/huggingface
+      TRANSLATION_URL: ${TRANSLATION_URL:-}
+      UDPIPE_URL: ${UDPIPE_URL:-}
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    volumes:
+      - ./data:/data
+      # The API builds a LanguageIdentifier during lifespan startup, which downloads
+      # the FastText model from HuggingFace. Without this volume that download
+      # repeats on every `up` and fails outright on a host with no egress — and the
+      # service then starts DEGRADED, reporting every document as 'en'. Only the
+      # batch service used to have the cache mounted.
+      - hf-cache:/cache/huggingface
+      - ./config.txt:/app/config.txt:ro
+    profiles: ["api"]
+    # HEALTHCHECK comes from the `api` stage — no override needed. stop_grace_period
+    # is raised from Compose's 10s default: the stage allows uvicorn 20s to drain
+    # in-flight requests plus up to 25s in serve_lifecycle, so 10s would SIGKILL
+    # mid-drain. Matches atrium-project/docs/templates/k8s's grace budget. (#55)
+    stop_grace_period: 60s
+
 volumes:
   hf-cache:
