@@ -25,23 +25,91 @@ docker compose --profile api up -d
 | GET    | `/ready`     | readiness probe (issue #55) — 503 until the backend has warmed up, 200 while serving, 503 the instant `SIGTERM` arrives. The Kubernetes `readinessProbe`/`startupProbe` target |
 | POST   | `/translate` | translate one XML document (multipart upload; optional baseline ATRIUM Document JSON)                                                                                          |
 
-Full request/response schemas: `GET /openapi.json`, or the Swagger UI at `/docs`, from a
+Machine-readable schemas: `GET /openapi.json`, or the Swagger UI at `/docs`, from a
 running server. The repo-root `README.md` covers the CLI and the translation logic itself.
+
+### `POST /translate` (multipart form)
+
+| Field           | In    | Type    | Default | Meaning                                                                |
+|-----------------|-------|---------|---------|------------------------------------------------------------------------|
+| `file`          | form  | file    | —       | **Required.** The XML document. Filename must end in `.xml`.           |
+| `document_json` | form  | file    | —       | Optional baseline ATRIUM Document JSON to accrete onto.                |
+| `source_lang`   | query | string  | `auto`  | ISO 639-1 code, or `auto` to detect with FastText.                     |
+| `target_lang`   | query | string  | `en`    | ISO 639-1 code.                                                        |
+| `is_alto`       | query | boolean | `true`  | `true` → ALTO dual-pass reconstruction; `false` → XPath metadata mode. |
+
+```bash
+curl -sf -F "file=@page.alto.xml" \
+     "localhost:8000/translate?source_lang=cs&target_lang=en&is_alto=true" \
+     -o page_en.alto.xml
+```
+
+### Response
+
+**200** with `Content-Type: application/xml` and
+`Content-Disposition: attachment; filename="<doc>_<lang>.alto.xml"` — the body is
+the translated document, structurally identical to the input.
+
+When `document_json` is supplied the response is instead `multipart/mixed`: the
+translated XML first, then the updated ATRIUM Document JSON, each with its own
+`Content-Disposition` filename.
+
+The response carries no JSON envelope by design — the document is the payload, so
+the endpoint composes with `curl -o` and with the pipeline's other stages.
+
+### Errors
+
+Harmonised across all five ATRIUM services (`agent_skill_strategy.md` §4.4), so a
+client can treat them uniformly:
+
+| Status | Meaning                      | When                                                                                                                                                        |
+|--------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `413`  | Payload too large            | Upload exceeds `MAX_UPLOAD_MB`, or the declared envelope exceeds the cap. Enforced *during* the read, so an oversized body is refused rather than buffered. |
+| `415`  | Unsupported media type       | `Content-Type` is neither `multipart/form-data` nor `application/json`.                                                                                     |
+| `422`  | Unusable input               | Missing filename, or a filename not ending in `.xml`.                                                                                                       |
+| `500`  | Translation failed           | The pipeline raised — malformed XML, or the backend failed after retries.                                                                                   |
+| `503`  | Warming up, or shutting down | Before the backend is warm, or after `SIGTERM`. **Retryable** against another replica.                                                                      |
+
+Error bodies are FastAPI's `{"detail": ...}`. `detail` is a **string** for the
+errors this service raises itself (the table above), and a **list of validation
+objects** when FastAPI rejects the request before the handler runs — a `POST` with
+`Content-Type: application/json` and no `file` part returns `422` in that second
+shape. A client should not assume `detail` is a string.
+
+## How it works
+
+1. **Guard** — `verify_content_type` rejects a wrong `Content-Type` with 415;
+   `_refuse_if_draining()` answers 503 once a shutdown signal has arrived, which
+   bounds the set of requests the drain has to wait for.
+2. **Read** — the upload is read in 1 MiB chunks and abandoned the moment it
+   crosses `MAX_UPLOAD_MB`, then written into a per-request
+   `TemporaryDirectory()`. Nothing is retained between requests: that is what
+   makes the service horizontally scalable.
+3. **Translate** — the handler calls the *same* `main.process_single_file()` the
+   batch CLI uses, in a worker thread via `asyncio.to_thread`. The thread is not
+   a tidy-up: uvicorn's `SIGTERM` handler is an event-loop callback, so a
+   synchronous translation holding the loop would make the shutdown contract
+   unenforceable.
+4. **Record** — a paradata JSON is written for the run, including the translation
+   endpoint *actually resolved* (issue #63) rather than a literal, and the
+   effective licence computed from the components the run exercised.
+5. **Return** — the rewritten XML streams back as an attachment; the
+   `TemporaryDirectory` is removed as the request ends.
 
 ## Configuration (environment)
 
-| Variable              | Default   | Meaning                                                                                   |
-|-----------------------|-----------|-------------------------------------------------------------------------------------------|
-| `MAX_UPLOAD_MB`       | `50`      | canonical upload limit                                                                    |
-| `ALLOWED_ORIGINS`     | `*`       | CSV of CORS origins                                                                       |
-| `TRANSLATION_BACKEND` | `lindat`  | backend seam shared with the CLI (issue #4)                                               |
-| `TRANSLATION_URL`     | LINDAT    | translation API base URL for the `lindat` backend; `LINDAT_BASE_URL` is an alias (issue #63) |
-| `UDPIPE_URL`          | LINDAT    | UDPipe 2 endpoint for vocabulary lemma matching; same name as atrium-nlp-enrich (issue #63) |
-| `PORT`                | `8000`    | port the service **binds**, and the one `service/healthcheck.py` probes (issues #55, #58) |
-| `HOST`                | `0.0.0.0` | bind address (issue #58). ⚠️ see the warning below                                        |
-| `GRACEFUL_SHUTDOWN_S` | `20`      | seconds uvicorn waits for in-flight requests (issue #55)                                  |
-| `RELOAD`              | `false`   | filesystem auto-reload — development only, never in a deployment                          |
-| `LOG_LEVEL`           | `INFO`    | root logger level for the `python -m service.api` start path (issue #61)                  |
+| Variable              | Default   | Meaning                                                                                                                                                                                                                      |
+|-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MAX_UPLOAD_MB`       | `50`      | canonical upload limit                                                                                                                                                                                                       |
+| `ALLOWED_ORIGINS`     | `*`       | CSV of CORS origins. The code default is the `*` wildcard (credentials are then disabled, per the CORS spec); `.env.example` ships a localhost list as a hardened *example*, not as the default. Narrow it for a deployment. |
+| `TRANSLATION_BACKEND` | `lindat`  | backend seam shared with the CLI (issue #4)                                                                                                                                                                                  |
+| `TRANSLATION_URL`     | LINDAT    | translation API base URL for the `lindat` backend; `LINDAT_BASE_URL` is an alias (issue #63)                                                                                                                                 |
+| `UDPIPE_URL`          | LINDAT    | UDPipe 2 endpoint for vocabulary lemma matching; same name as atrium-nlp-enrich (issue #63)                                                                                                                                  |
+| `PORT`                | `8000`    | port the service **binds**, and the one `service/healthcheck.py` probes (issues #55, #58)                                                                                                                                    |
+| `HOST`                | `0.0.0.0` | bind address (issue #58). ⚠️ see the warning below                                                                                                                                                                           |
+| `GRACEFUL_SHUTDOWN_S` | `20`      | seconds uvicorn waits for in-flight requests (issue #55)                                                                                                                                                                     |
+| `RELOAD`              | `false`   | filesystem auto-reload — development only, never in a deployment                                                                                                                                                             |
+| `LOG_LEVEL`           | `INFO`    | root logger level for the `python -m service.api` start path (issue #61)                                                                                                                                                     |
 
 `TRANSLATION_URL` and `UDPIPE_URL` make the two LINDAT-hosted backing services
 attachable (12-factor IV): set either to reach a self-hosted or stubbed instance

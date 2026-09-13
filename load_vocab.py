@@ -11,7 +11,9 @@ traced back to its concept — see :data:`CSV_COLUMNS` for the CSV shape.
 
 from __future__ import annotations
 
+import argparse
 import csv
+import sys
 import time
 import urllib.parse
 from pathlib import Path
@@ -369,6 +371,54 @@ def write_vocabulary_csv(records: dict, out_path: Path | str = DEFAULT_OUT) -> i
     return len(records)
 
 
-# ... (no argparse CLI in this file: the `python load_vocab.py --skip-teater/--out/--delay`
-# entry point the README documents has never existed here. merge_records() and
-# write_vocabulary_csv() above are the pieces a caller needs to assemble it.)
+def main(argv: list[str] | None = None) -> int:
+    """Harvest both vocabulary sources and write the merged CSV.
+
+    This entry point is the one README.md has documented since v0.4.0 and that
+    did not exist: the file previously ended with a comment saying as much, which
+    made the README's "Harvesting the Vocabulary" section a set of commands no
+    one could run. The commands are the documented ones, unchanged, so the
+    documentation became true rather than the other way round.
+
+    Exit codes follow main.py's vocabulary (0 ok, 1 usage, 2 nothing harvested).
+    """
+    parser = argparse.ArgumentParser(
+        prog="load_vocab.py",
+        description=(
+            "Harvest archaeological term pairs from the AMCR OAI-PMH endpoint and the "
+            "TEATER GraphQL API, merge them, and write a Tag-and-Protect vocabulary CSV."
+        ),
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=DEFAULT_OUT,
+        help=f"output CSV path (default: {DEFAULT_OUT})",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=DEFAULT_DELAY,
+        help=f"seconds between AMCR OAI-PMH page requests (default: {DEFAULT_DELAY})",
+    )
+    parser.add_argument("--skip-amcr", action="store_true", help="do not harvest AMCR")
+    parser.add_argument("--skip-teater", action="store_true", help="do not harvest TEATER")
+    args = parser.parse_args(argv)
+
+    if args.skip_amcr and args.skip_teater:
+        parser.error("--skip-amcr and --skip-teater together leave nothing to harvest")
+
+    amcr = None if args.skip_amcr else harvest_amcr_records(delay=args.delay)
+    teater = None if args.skip_teater else harvest_teater_records()
+
+    records = merge_records(amcr, teater)
+    if not records:
+        print("[WARN] No term pairs harvested; leaving the output file untouched.")
+        return 2
+
+    write_vocabulary_csv(records, args.out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

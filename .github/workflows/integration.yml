@@ -1,0 +1,101 @@
+# .github/workflows/integration.yml
+# The lane that runs /translate end to end against a reachable backend.
+#
+# Why it exists, in the words of the workflow that could not catch it
+# (scheduled-smoke.yml): "What it does NOT cover: a live LINDAT backend. Every
+# /translate test mocks the pipeline, which is how service/api.py shipped
+# omitting `backend` from its args and returned HTTP 500 on every real upload.
+# That gap needs an integration lane with a reachable backend, not a marker."
+#
+# Two jobs, deliberately asymmetric:
+#
+#   stub-backend  — runs on every push/PR. A local http.server speaks the LINDAT
+#                   and UDPipe wire formats, so the real handler, the real
+#                   LindatTranslator, the real chunker, the real ALTO
+#                   reconstruction and the real paradata write all execute with
+#                   nothing mocked. Offline, deterministic, no load on a shared
+#                   public research service.
+#   live-backend  — manual only. Same tests against the real LINDAT hosts. What a
+#                   stub cannot prove is that LINDAT's own contract still holds:
+#                   if CUBBITT changes its response shape, the stub lane stays
+#                   green. Run this before a release, not on every push — the
+#                   endpoint is a shared public service we do not own, and a CI
+#                   lane hammering it on every commit is not a reasonable
+#                   neighbour.
+
+name: Integration
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [test, master]
+  pull_request:
+    branches: [test, master]
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Also run against the real LINDAT endpoints"
+        type: boolean
+        default: false
+
+jobs:
+  stub-backend:
+    name: /translate against a local stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          # (12-factor X) Matches the image and every other lane. Guarded by
+          # tests/test_python_version_parity.py. (atrium-project#64)
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt -r requirements.txt -r service/requirements.txt
+
+      - name: Run the integration lane
+        # No TRANSLATION_URL/UDPIPE_URL here: the tests set them to the stub's own
+        # ephemeral address, which is the point — atrium-project#63 made those
+        # endpoints attachable, so substituting one is a supported configuration
+        # rather than a test-only seam.
+        run: pytest -m integration -rs
+
+  live-backend:
+    name: /translate against the real LINDAT endpoints
+    if: github.event_name == 'workflow_dispatch' && inputs.live
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt -r requirements.txt -r service/requirements.txt
+
+      - name: Run the integration lane against production endpoints
+        # ATRIUM_LIVE_BACKEND makes the fixture skip its stub and leave the
+        # defaults in place, so the same tests exercise the real hosts. A failure
+        # here is a contract change at LINDAT, not a regression in this repo —
+        # read it that way before touching the code.
+        env:
+          ATRIUM_LIVE_BACKEND: "1"
+        run: pytest -m integration -rs
