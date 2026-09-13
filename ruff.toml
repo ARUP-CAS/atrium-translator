@@ -1,5 +1,17 @@
 # Base Ruff configuration for ATRIUM tools
+#
+# Aligned with atrium-project docs/templates/ruff.toml, which is a FLOOR rather
+# than a ceiling: `target-version` and the "B" (flake8-bugbear) rules below are a
+# deliberate superset, matching alto-postprocess, nlp-enrich and llm-enrich.
+#
+# target-version pins the syntax Ruff lints against to the version this repo
+# actually ships -- every image is python:3.11-slim. It had been unset, so the
+# Python version lived only in the Dockerfile FROM line and in each workflow's
+# `python-version:` input, which is precisely how scheduled-smoke.yml came to run
+# a 3.12 lane against a 3.11 image without anything noticing (atrium-project#64).
 line-length = 120
+
+target-version = "py311"
 
 # Apply exclude/extend-exclude even to EXPLICIT command-line paths. Without this the
 # [format] exclude below is inert exactly where it must work: pre-commit runs
@@ -17,6 +29,29 @@ extend-exclude = [
 ]
 
 [lint]
+# "B" (flake8-bugbear) is the one part of alto-postprocess's superset NOT adopted
+# here, and the reason is recorded rather than left as an omission. Enabling it
+# reports 15 findings, and the two clusters that dominate are both wrong for this
+# codebase:
+#
+#   * B905 (`zip()` without strict=) x5, all in utils.py's ALTO dual-pass
+#     reconstruction. A line-count mismatch between the block pass and the line
+#     pass is not an error there -- it is the documented condition that triggers
+#     the 1-by-1 re-translation fallback. `strict=True` would turn a handled case
+#     into an exception on real scanned input; `strict=False` is pure noise.
+#   * B023 (loop variable not bound) x2 at processors/translator.py:395,404. The
+#     lambdas are consumed by re.sub() inside the same iteration, before the name
+#     is rebound, so the late-binding B023 warns about cannot occur.
+#
+# The remainder (B904 exception chaining x4, B007, B017, B018) are worth doing,
+# but as their own change with its own review -- not smuggled in under a
+# version-pin commit. Recorded in agent_dev_logs so the list is not rediscovered.
+#
+# If "B" is adopted later it needs this, or every endpoint in service/api.py
+# becomes a B008 error, FastAPI's markers being calls in argument defaults:
+#
+#   [lint.flake8-bugbear]
+#   extend-immutable-calls = ["fastapi.File", "fastapi.Form", "fastapi.Depends"]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 

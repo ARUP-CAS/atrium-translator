@@ -54,12 +54,59 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Build deployment package
+        # This list was hand-maintained and had fallen behind the code: it omitted
+        # atrium_document.py (imported at main.py:31 and by utils.py),
+        # atrium_document.schema.json (loaded at atrium_document.py:1005),
+        # service/atrium_service.py (imported at service/api.py:29) and
+        # service/healthcheck.py -- so the published zip, which is the primary
+        # download path for anyone not using the container, raised
+        # ModuleNotFoundError on first run. A release artifact that cannot start is
+        # the build/release/run separation failing in the direction that matters
+        # (atrium-project#53 factor V).
+        #
+        # tests/test_release_bundle.py recomputes the import closure of the two
+        # entry points and fails if this list falls behind again, so the next
+        # canonical file to land is a red test rather than a broken download.
         run: |
+          set -euo pipefail
           mkdir -p dist/service
-          cp main.py processors/ utils.py load_vocab.py atrium_paradata.py para_licenses.py para_config.txt dist/ -r
-          cp service/api.py service/requirements.txt dist/service/ -r
+
+          # Entry points and their package.
+          cp -r main.py utils.py load_vocab.py processors/ dist/
+
+          # Vendored canonical modules the entry points import, plus the schema
+          # atrium_document.py resolves next to itself at runtime.
+          cp atrium_document.py atrium_document.schema.json dist/
+          cp atrium_paradata.py para_licenses.py dist/
+
+          # The HTTP surface. atrium_service.py and healthcheck.py are canonical
+          # files held byte-identical by para-drift; the service does not start
+          # without the first and the container cannot probe itself without the second.
+          cp service/api.py service/atrium_service.py service/healthcheck.py service/requirements.txt dist/service/
+
+          # Install manifest and the run configuration main.py reads by default
+          # (--config defaults to config.txt; config.txt's `fields` points at
+          # amcr-fields.txt; atrium_paradata.py looks for para_config.txt).
+          cp requirements.txt config.txt para_config.txt amcr-fields.txt dist/
+
           cd dist
           zip -r ../atrium-translator-release.zip .
+
+      - name: Verify the bundle actually runs
+        # Acceptance for the above, performed rather than asserted: unpack the
+        # published artifact into a clean directory, install it, and import both
+        # entry points. Importing is enough -- it resolves every import in the
+        # closure -- and unlike `python -m service.api` it does not start a server
+        # and hang the job, since that module's __main__ block runs uvicorn
+        # directly and takes no --help.
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/bundle-check && mkdir -p /tmp/bundle-check
+          unzip -q atrium-translator-release.zip -d /tmp/bundle-check
+          cd /tmp/bundle-check
+          python -m pip install --quiet -r requirements.txt -r service/requirements.txt
+          python -c "import main; print('batch entry point OK')"
+          python -c "import service.api; print('API entry point OK')"
 
       - name: Create GitHub Release
         # SHA-pinned: this action holds `contents: write`. A moving tag can be

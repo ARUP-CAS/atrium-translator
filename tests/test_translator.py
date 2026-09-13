@@ -47,7 +47,12 @@ def test_post_with_retry_max_retries_exceeded(mock_post):
     with pytest.raises(TranslationError):
         translator._post_with_retry("http://fake-api.cz", data={"text": "test"})
 
-    assert mock_post.call_count == 11  # 1 initial attempt + 10 default retries
+    # 1 initial attempt + LINDAT_MAX_RETRIES (default 4). This used to assert 11,
+    # matching a `max_retries = max(10, max_retries)` clamp inside
+    # request_with_retry that silently overrode the configured policy -- the
+    # comment called 10 "default" when the declared default, here and in
+    # .env.example, has always been 4.
+    assert mock_post.call_count == 5
 
 
 def test_homonym_single_word_lemma_protection():

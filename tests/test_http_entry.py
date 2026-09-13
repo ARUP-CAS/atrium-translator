@@ -111,3 +111,76 @@ def test_throttle_invoked_every_attempt():
 
 def test_default_retryable_status_contents():
     assert DEFAULT_RETRYABLE_STATUS >= {429, 500, 502, 503, 504}
+
+
+# ── Retry policy is configuration, not a suggestion (atrium-project#53, factor III) ──
+#
+# request_with_retry used to clamp its own arguments upward:
+#
+#     max_retries = max(10, max_retries)
+#     backoff_base_s = max(2, backoff_base_s)
+#
+# so LINDAT_MAX_RETRIES / LINDAT_BACKOFF_BASE_S / LLM_MAX_RETRIES /
+# LLM_BACKOFF_BASE_S were read from the environment and then discarded for every
+# value below the floor -- while .env.example and service/README.md documented
+# them as working knobs. The effective policy was 11 attempts backing off
+# 2*2**attempt, i.e. 2+4+...+1024 = 2046 s of sleep for ONE failing chunk, which
+# no /translate request could survive against GRACEFUL_SHUTDOWN_S=20 plus
+# serve_lifecycle's drain: the container was SIGKILLed mid-retry every time.
+#
+# The back-off half was invisible: pytest.ini sets LINDAT_BACKOFF_BASE_S=0.0,
+# max(2, 0.0) restored 2, and conftest.py patches time.sleep globally, so no test
+# could see the sleeps at all. The retry-count half was worse than invisible --
+# tests/test_translator.py and tests/test_llm_backend.py had both been updated to
+# assert 11 attempts and to call that "10 default retries", while the declared
+# default in the code, in .env.example and in service/README.md was 4. The suite
+# was green on a policy no caller had asked for, and said so in a comment.
+#
+# These tests assert the arguments are used AS GIVEN, and they fail loudly if the
+# clamp is ever reintroduced.
+
+
+def test_max_retries_is_honoured_exactly():
+    """max_retries=1 means 2 attempts total, not 11."""
+    perform = MagicMock(return_value=_Resp(503))
+    with pytest.raises(RuntimeError):
+        request_with_retry(perform, max_retries=1, backoff_base_s=0.0)
+    assert perform.call_count == 2
+
+
+def test_zero_retries_means_a_single_attempt():
+    perform = MagicMock(return_value=_Resp(503))
+    with pytest.raises(RuntimeError):
+        request_with_retry(perform, max_retries=0, backoff_base_s=0.0)
+    assert perform.call_count == 1
+
+
+def test_backoff_base_is_honoured_exactly(monkeypatch):
+    """sleep = base * 2**attempt (+ <0.25 jitter), with base as passed in."""
+    slept = []
+    monkeypatch.setattr(http_retry.time, "sleep", lambda s: slept.append(s))
+
+    with pytest.raises(RuntimeError):
+        request_with_retry(lambda: _Resp(500), max_retries=3, backoff_base_s=0.5)
+
+    # Three sleeps for three retries; jitter is uniform(0, 0.25).
+    assert len(slept) == 3
+    for actual, base in zip(slept, (0.5, 1.0, 2.0)):
+        assert base <= actual < base + 0.25
+
+
+def test_default_policy_fits_inside_the_shutdown_drain(monkeypatch):
+    """The call sites' defaults (4 retries, base 1.0s) must fit the drain budget.
+
+    GRACEFUL_SHUTDOWN_S defaults to 20 (Dockerfile `ENV`, service/api.py's
+    __main__). A retry policy whose worst case exceeds that guarantees the
+    SIGKILL that issue #55's drain contract exists to prevent, so the two
+    numbers are coupled and this test is where they are compared.
+    """
+    slept = []
+    monkeypatch.setattr(http_retry.time, "sleep", lambda s: slept.append(s))
+
+    with pytest.raises(RuntimeError):
+        request_with_retry(lambda: _Resp(503), max_retries=4, backoff_base_s=1.0)
+
+    assert sum(slept) < 20, f"default back-off totals {sum(slept):.1f}s, over the 20s drain budget"

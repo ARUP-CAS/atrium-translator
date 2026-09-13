@@ -501,7 +501,21 @@ def process_single_file(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def main():
+# ── Process exit codes ────────────────────────────────────────────────────────
+# main() used to `return` on every failure path with no sys.exit anywhere, so the
+# process exited 0 whatever happened: a Kubernetes Job or cron wrapper around the
+# batch image reported SUCCESS for a run that translated nothing. These mirror the
+# vocabulary the ecosystem already publishes for its agent-skill clients
+# (atrium-project docs/agent_skill_strategy.md): 0 ok, 1 usage/input, and a
+# distinct code per outcome a caller would want to branch on.
+EXIT_OK = 0
+EXIT_USAGE = 1  # bad arguments, missing input path, unloadable XSD
+EXIT_NO_INPUT = 2  # arguments were fine; nothing matched the allowed formats
+EXIT_FAILED = 3  # one or more documents failed to process
+
+
+def main() -> int:
+    """Run the batch pipeline; return a process exit code (see EXIT_* above)."""
     args, config = parse_arguments()
 
     print(f"\n{'=' * 60}")
@@ -511,7 +525,7 @@ def main():
     input_path = args.input_path
     if not input_path or (not input_path.is_dir() and not input_path.is_file()):
         print("[ERROR] Input path does not exist. Provide a valid file or directory.")
-        return
+        return EXIT_USAGE
 
     out_dir = args.output or Path.cwd() / f"translated_{args.target_lang}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -524,7 +538,7 @@ def main():
     ) as _logger:
         if not args.alto and not args.xpaths:
             print("[ERROR] Specify either the --alto flag or provide --xpaths / 'fields' in config.")
-            return
+            return EXIT_USAGE
 
         translator = get_backend(args.backend, vocab_path=args.vocabulary)
         identifier = LanguageIdentifier() if args.source_lang == "auto" else None
@@ -551,7 +565,7 @@ def main():
                 xsd_schema = load_xsd(args.xsd)
             except Exception as exc:
                 print(f"[ERROR] XSD schema load failed: {exc}")
-                return
+                return EXIT_USAGE
 
         # ── Collect files to process ───────────────────────────────────
         files_to_process: list[Path] = []
@@ -585,11 +599,12 @@ def main():
 
         if not files_to_process:
             print(f"[WARN] No files found matching allowed formats ({args.formats}).")
-            return
+            return EXIT_NO_INPUT
 
         # ── Process each file ──────────────────────────────────────────
         total_inputs = len(files_to_process)
         is_batch = input_path.is_dir() or (input_path.suffix == ".txt")
+        failed_files: list[str] = []
 
         for i, file_path in enumerate(files_to_process, 1):
             print(f"\n[FILE {i}/{total_inputs}] Processing: {file_path.name}")
@@ -605,6 +620,9 @@ def main():
                 _logger=_logger,
                 xsd_schema=xsd_schema,
             )
+
+            if not success:
+                failed_files.append(file_path.name)
 
             if success and not _components_logged:
                 # Record the components the *selected* backend actually exercised
@@ -653,6 +671,15 @@ def main():
     print(" PROCESSING COMPLETE ".center(60, "="))
     print(f"{'=' * 60}\n")
 
+    if failed_files:
+        # Per-file failures are caught and logged inside process_single_file so one
+        # bad document does not abandon the batch. That is the right behaviour and
+        # it stays -- but it must not also be invisible to the caller.
+        print(f"[ERROR] {len(failed_files)}/{total_inputs} document(s) failed: {', '.join(failed_files)}")
+        return EXIT_FAILED
+
+    return EXIT_OK
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

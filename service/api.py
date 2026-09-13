@@ -55,6 +55,59 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_MB = resolve_max_upload_mb(50)
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB * 1024 * 1024)  # retained: imported by tests/clients
 
+# Read uploads a megabyte at a time so the limit is enforced DURING the read.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Ceiling on the whole multipart envelope, checked against Content-Length before
+# the body is touched at all. /translate accepts two file parts (the XML and an
+# optional baseline document JSON), so a legitimate envelope can be about twice
+# the per-file limit; the extra megabyte covers multipart boundaries and headers.
+# This is a coarse early reject, not the real limit -- _read_bounded() below is.
+MAX_REQUEST_BYTES = 2 * MAX_UPLOAD_BYTES + _UPLOAD_CHUNK_BYTES
+
+
+def _reject_oversized_envelope(request: Request) -> None:
+    """413 on a declared Content-Length past MAX_REQUEST_BYTES, before reading.
+
+    Starlette spools a multipart part to a temporary FILE once it grows past its
+    own in-memory threshold, so an unbounded upload fills the container's disk
+    during parsing -- before any handler code runs. A declared length is a hint
+    (it can be absent, and it can lie), which is why this only supplements the
+    per-part accounting in _read_bounded().
+    """
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Request too large. Max upload size is {MAX_UPLOAD_BYTES} bytes per file.",
+        )
+
+
+async def _read_bounded(upload: UploadFile, limit_bytes: int, label: str) -> bytes:
+    """Read *upload* fully, raising 413 as soon as it exceeds *limit_bytes*.
+
+    The obvious form -- `content = await upload.read()` and then check
+    `len(content)` -- decides whether the upload was too large only after the
+    whole of it is resident in memory, so the 413 it raises is unreachable for
+    exactly the inputs that need it: an unauthenticated caller could OOM-kill
+    the container before the check ran. Reading in bounded chunks and stopping
+    at the limit costs one extra join and makes the limit real.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{label} too large. Max size is {limit_bytes} bytes.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 models = {}
 
@@ -95,9 +148,29 @@ add_cors(app)
 
 
 def _deep_health() -> str | None:
-    """Deep readiness (§4.1): the translation backend has warmed up."""
+    """Deep readiness (§4.1): both backing models are usable, not merely present.
+
+    The translator check alone was not enough. `LanguageIdentifier.__init__`
+    downloads the FastText model from HuggingFace at container start, and used to
+    swallow any failure: `self.model` became None, `detect()` then answered
+    ("en", 0.0) for every document, and the service reported itself perfectly
+    healthy while silently mislabelling the source language of everything it was
+    given. In an egress-restricted cluster that download is precisely what fails,
+    so the failure mode is the deployment we are asking ARUP/ARUB to run.
+
+    Reported rather than fatal, deliberately: a deployment that always passes
+    `--source_lang` never consults the identifier, and crash-looping it would be
+    wrong. `GET /health?deep=true` is where a partner sees the degradation --
+    `/health` (liveness) and `/ready` (routing) stay as they were.
+    """
     if not models.get("translator"):
         return "translation backend not warmed up"
+
+    identifier = models.get("identifier")
+    load_error = getattr(identifier, "load_error", None)
+    if load_error:
+        return f"language identification model unavailable ({load_error}); source-language detection is degraded"
+
     return None
 
 
@@ -143,9 +216,8 @@ async def translate_document(
         # §4.4: unusable/invalid input is 422 (harmonized from 400).
         raise HTTPException(status_code=422, detail="Only XML files are supported.")
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_BYTES} bytes.")
+    _reject_oversized_envelope(request)
+    content = await _read_bounded(file, MAX_UPLOAD_BYTES, "File")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         work_dir = Path(tmpdir)
@@ -155,7 +227,7 @@ async def translate_document(
         doc_json_path = None
         if document_json:
             doc_json_path = work_dir / (document_json.filename or "baseline.json")
-            doc_json_path.write_bytes(await document_json.read())
+            doc_json_path.write_bytes(await _read_bounded(document_json, MAX_UPLOAD_BYTES, "Baseline document JSON"))
 
         # D3/D11 (atrium-project#10): the same derivation process_single_file() uses, so the
         # filename this endpoint promises the client and the doc_id the record is keyed on

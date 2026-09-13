@@ -232,7 +232,9 @@ def test_persistent_5xx_raises_translation_error(mock_post):
     with pytest.raises(TranslationError):
         b.translate("Ahoj", "cs", "en")
 
-    assert mock_post.call_count == 11  # 1 initial attempt + 10 default retries
+    # 1 initial attempt + LLM_MAX_RETRIES (default 4); see the note in
+    # tests/test_translator.py on why this used to read 11.
+    assert mock_post.call_count == 5
 
 
 @patch("processors.llm_translator.requests.post")
