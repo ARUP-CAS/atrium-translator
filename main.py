@@ -33,7 +33,14 @@ from atrium_paradata import ParadataLogger
 from processors.backend import TranslationBackend, get_backend
 from processors.chunking import DEFAULT_CHUNK_SIZE
 from processors.identifier import LanguageIdentifier
-from utils import load_xsd, process_alto_xml, process_metadata_xml
+from utils import (
+    DEFAULT_OUTPUT_MODE,
+    OUTPUT_MODES,
+    load_xsd,
+    normalize_output_mode,
+    process_alto_xml,
+    process_metadata_xml,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -51,6 +58,10 @@ def _build_paradata_config(args, config: configparser.ConfigParser) -> dict:
         "target_lang": str(args.target_lang),
         "formats": str(args.formats),
         "mode": "alto" if args.alto else "metadata",
+        # #46: replace vs append is an output-CONTRACT choice, so it belongs in the
+        # provenance record — a consumer holding the artifact needs to know whether
+        # the source-language text was kept beside the translation or overwritten.
+        "output_mode": str(getattr(args, "output_mode", DEFAULT_OUTPUT_MODE) or DEFAULT_OUTPUT_MODE),
         "translation_backend": backend_name,
         "xpaths_file": str(args.xpaths or ""),
         "xsd_url": str(args.xsd or ""),
@@ -310,6 +321,20 @@ def parse_arguments():
         help="Directory for URL-ingested inputs (default: <output>/downloaded_inputs).",
     )
     parser.add_argument(
+        "--output-mode",
+        type=str,
+        choices=list(OUTPUT_MODES),
+        default=None,
+        help=(
+            "How the translation is written into the document (issue #46). "
+            "'replace' (default) overwrites the source-language field. "
+            "'append' keeps it and adds an xml:lang-marked sibling beside it, "
+            "following AMCR's own heslo/heslo_en convention. ALTO labels rather "
+            "than duplicates in append mode. Precedence: this flag, then "
+            "config.txt's 'output_mode', then the OUTPUT_MODE env var, then 'replace'."
+        ),
+    )
+    parser.add_argument(
         "--fast-align",
         action="store_true",
         help="ALTO only: distribute block tokens by source word count instead of "
@@ -344,6 +369,15 @@ def parse_arguments():
         args.backend = defaults.get("translation_backend") or os.environ.get("TRANSLATION_BACKEND") or "lindat"
     if args.xpaths is None and "fields" in defaults:
         args.xpaths = Path(defaults["fields"])
+    if args.output_mode is None:
+        # Same precedence chain as --backend: CLI wins, then config.txt, then the
+        # environment, then the shipped default. OUTPUT_MODE is read here as well
+        # as in the service so a containerised BATCH run can set the mode without
+        # rewriting config.txt (12-factor III).
+        args.output_mode = normalize_output_mode(
+            defaults.get("output_mode") or os.environ.get("OUTPUT_MODE") or DEFAULT_OUTPUT_MODE,
+            source="output_mode",
+        )
 
     if args.vocabulary is None and "vocabulary" in defaults:
         vocab_candidate = Path(defaults["vocabulary"])
@@ -453,6 +487,7 @@ def process_single_file(
                         doc=doc,
                         backend=args.backend,
                         doc_id=doc_id,
+                        output_mode=getattr(args, "output_mode", DEFAULT_OUTPUT_MODE),
                     )
                 else:
                     process_metadata_xml(
@@ -468,6 +503,7 @@ def process_single_file(
                         doc=doc,
                         backend=args.backend,
                         doc_id=doc_id,
+                        output_mode=getattr(args, "output_mode", DEFAULT_OUTPUT_MODE),
                     )
 
                 # Append derived step outputs and licenses to the accretion model

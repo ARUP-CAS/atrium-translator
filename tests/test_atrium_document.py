@@ -176,7 +176,15 @@ def test_process_metadata_xml_writes_schema_shaped_translations(
         doc.finalize(str(tmp_path / "CTX01.document.json"))
 
     result = json.loads((tmp_path / "CTX01.document.json").read_text(encoding="utf-8"))
-    assert result["translations"] == {"source_lang": "cs", "target_lang": "en", "backend": "lindat"}
+    assert result["translations"] == {
+        "source_lang": "cs",
+        "target_lang": "en",
+        "backend": "lindat",
+        # issue #46: which output contract produced this artifact. Asserted by
+        # exact equality on purpose — a silent extra key in a block shared across
+        # six repos is exactly what this test exists to catch.
+        "output_mode": "replace",
+    }
 
 
 def test_process_alto_xml_writes_schema_shaped_translations(alto_xml_file, tmp_path, mock_translator, mock_paradata):
@@ -192,7 +200,12 @@ def test_process_alto_xml_writes_schema_shaped_translations(alto_xml_file, tmp_p
         doc.finalize(str(tmp_path / "CTX02.document.json"))
 
     result = json.loads((tmp_path / "CTX02.document.json").read_text(encoding="utf-8"))
-    assert result["translations"] == {"source_lang": "cs", "target_lang": "en", "backend": "ctranslate2"}
+    assert result["translations"] == {
+        "source_lang": "cs",
+        "target_lang": "en",
+        "backend": "ctranslate2",
+        "output_mode": "replace",
+    }
 
 
 def test_translations_output_validates_against_schema(amcr_xml_file, tmp_path, mock_translator, mock_paradata):

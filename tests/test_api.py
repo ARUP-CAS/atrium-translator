@@ -176,4 +176,135 @@ def test_translate_real_pipeline_keeps_the_multi_dot_doc_id():
     record = _json_part(response.content)
     assert record["doc_id"] == MULTI_DOT_DOC_ID
     assert record["pages"][0]["quality_score"] == 0.98  # baseline accreted, not orphaned
-    assert record["translations"] == {"source_lang": "cs", "target_lang": "en", "backend": "lindat"}
+    assert record["translations"] == {
+        "source_lang": "cs",
+        "target_lang": "en",
+        "backend": "lindat",
+        "output_mode": "replace",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Metadata mode through the API (issue #46)
+#
+# Every /translate test above either mocks process_single_file or passes
+# is_alto=true, so no test had ever driven the endpoint's metadata path. That gap
+# hid two defects at once: the handler passed a hard-coded empty XPath list to
+# process_single_file, and `is_alto` was bound from the query string while every
+# caller in this file sends it in the multipart body. Together they meant
+# `is_alto=false` produced HTTP 200 and an untranslated document — the worst
+# possible answer, because a caller cannot distinguish it from success.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_AMCR_NS = "https://api.aiscr.cz/schema/amcr/2.2/"
+_AMCR_XML = f"""<?xml version="1.0" encoding="utf-8"?>
+<amcr:amcr xmlns:amcr="{_AMCR_NS}">
+  <amcr:lokalita>
+    <amcr:chranene_udaje>
+      <amcr:nazev>Davle - kultovni areal</amcr:nazev>
+    </amcr:chranene_udaje>
+  </amcr:lokalita>
+</amcr:amcr>
+""".encode()
+
+_AMCR_XPATH = "//amcr:amcr/amcr:lokalita/amcr:chranene_udaje/amcr:nazev"
+
+
+def _metadata_translator():
+    translator = MagicMock()
+    translator.name = "lindat"
+    translator.vocabulary = {}
+    translator.protected_count = 0
+    translator.translate.side_effect = lambda text, *a, **k: f"EN:{text}"
+    translator.license_components.return_value = ["lindat_cubbitt"]
+    return translator
+
+
+def test_translate_metadata_mode_actually_translates():
+    """The assertion that would have caught both defects.
+
+    `is_alto` is sent in the BODY, the way every other caller in this file sends it,
+    and the response must come back with the field translated rather than echoed.
+    """
+    models_patch = {
+        "translator": _metadata_translator(),
+        "identifier": MagicMock(),
+        "xpaths_list": [_AMCR_XPATH],
+    }
+    with patch("service.api.models", models_patch):
+        response = client.post(
+            "/translate",
+            files={"file": ("C-N1000019.xml", _AMCR_XML, "application/xml")},
+            data={"is_alto": "false", "source_lang": "cs"},
+        )
+
+    assert response.status_code == 200, response.content[:400]
+    assert b"EN:Davle - kultovni areal" in response.content, "metadata mode must translate"
+    assert b"<amcr:nazev>Davle" not in response.content, "replace mode must not keep the source"
+
+
+def test_translate_metadata_mode_refuses_when_no_xpaths_are_configured():
+    """An empty target list must be a 422, never a 200 with an unchanged document."""
+    models_patch = {
+        "translator": _metadata_translator(),
+        "identifier": MagicMock(),
+        "xpaths_list": [],
+    }
+    with patch("service.api.models", models_patch):
+        response = client.post(
+            "/translate",
+            files={"file": ("C-N1000019.xml", _AMCR_XML, "application/xml")},
+            data={"is_alto": "false"},
+        )
+
+    assert response.status_code == 422
+    assert "AMCR_FIELDS_PATH" in response.json()["detail"], "the error must name the knob to set"
+
+
+def test_translate_alto_mode_is_unaffected_by_missing_xpaths():
+    """ALTO needs no XPaths, so a missing fields file must not refuse ALTO work."""
+    translator = _metadata_translator()
+    with patch("service.api.models", {"translator": translator, "identifier": MagicMock(), "xpaths_list": []}):
+        response = client.post(
+            "/translate?source_lang=cs",
+            files={"file": ("page.alto.xml", _ALTO_XML, "application/xml")},
+            data={"is_alto": "true"},
+        )
+    assert response.status_code == 200, response.content[:400]
+
+
+def test_translate_append_mode_keeps_the_source_field():
+    """The #46 switch, end to end through the service."""
+    models_patch = {
+        "translator": _metadata_translator(),
+        "identifier": MagicMock(),
+        "xpaths_list": [_AMCR_XPATH],
+    }
+    with patch("service.api.models", models_patch):
+        response = client.post(
+            "/translate",
+            files={"file": ("C-N1000019.xml", _AMCR_XML, "application/xml")},
+            data={"is_alto": "false", "source_lang": "cs", "output_mode": "append"},
+        )
+
+    assert response.status_code == 200, response.content[:400]
+    body = response.content
+    assert b"Davle - kultovni areal" in body, "the Czech must survive"
+    assert b"EN:Davle - kultovni areal" in body, "the English must be added"
+    assert b'xml:lang="en"' in body, "the added half must be labelled"
+
+
+def test_is_alto_is_honoured_from_the_query_string_too():
+    """Both call shapes must keep working — callers in this repo are split between them."""
+    models_patch = {
+        "translator": _metadata_translator(),
+        "identifier": MagicMock(),
+        "xpaths_list": [_AMCR_XPATH],
+    }
+    with patch("service.api.models", models_patch):
+        response = client.post(
+            "/translate?is_alto=false&source_lang=cs",
+            files={"file": ("C-N1000019.xml", _AMCR_XML, "application/xml")},
+        )
+    assert response.status_code == 200, response.content[:400]
+    assert b"EN:Davle - kultovni areal" in response.content

@@ -12,12 +12,118 @@ access that ``xs:import``-based schemas may require.
 """
 
 import difflib
+import logging
 import sys
 import urllib.request
 
 from lxml import etree
 
 from atrium_document import canonical_doc_id
+
+logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Output mode (issue #46 — the "replace vs append" question)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# REPLACE is what this tool has always done and stays the default: the source
+# text node is overwritten, so the artifact is a monolingual mirror of the input
+# and the Czech survives only in the sidecar `_log.csv`.
+#
+# APPEND keeps the source and adds the translation beside it. For AMCR metadata
+# that is a sibling element distinguished by `xml:lang` — the shape AMCR's own
+# thesaurus already uses for `heslo` / `heslo_en`, which `load_vocab.py` reads on
+# every glossary build. See `agent_dev_logs/digests/46.digest.md`.
+#
+# The two modes are a genuine fork in the OUTPUT CONTRACT, not a formatting
+# preference, which is why the choice is recorded in paradata and in the document
+# record's `translations` block rather than being left implicit.
+OUTPUT_MODE_REPLACE = "replace"
+OUTPUT_MODE_APPEND = "append"
+OUTPUT_MODES = (OUTPUT_MODE_REPLACE, OUTPUT_MODE_APPEND)
+DEFAULT_OUTPUT_MODE = OUTPUT_MODE_REPLACE
+
+#: The XML-namespace `lang` attribute in Clark notation. `xml:lang` is a GLOBAL
+#: attribute from the XML namespace rather than anything AMCR declares, and the
+#: AMCR corpus already carries it on 23 controlled-vocabulary element types — so
+#: the schema's import of the XML namespace demonstrably exists. Whether the
+#: schema also permits the repeated ELEMENT that append mode emits is the open
+#: `maxOccurs` question (#46): this code does not guess, it emits the pair and
+#: lets `--xsd` report.
+XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
+
+
+def normalize_output_mode(value, *, source="output mode"):
+    """Coerce *value* to a member of :data:`OUTPUT_MODES`.
+
+    Falls back to the default with a warning rather than raising: an unreadable
+    mode string arriving from a config file or an env var should not take a batch
+    run down mid-corpus, and the effective mode is recorded in paradata either
+    way, so a run is never ambiguous about what it produced.
+    """
+    if value is None:
+        return DEFAULT_OUTPUT_MODE
+    candidate = str(value).strip().lower()
+    if not candidate:
+        return DEFAULT_OUTPUT_MODE
+    if candidate not in OUTPUT_MODES:
+        logger.warning(
+            "Unknown %s %r; falling back to %r (valid: %s).",
+            source,
+            value,
+            DEFAULT_OUTPUT_MODE,
+            ", ".join(OUTPUT_MODES),
+        )
+        return DEFAULT_OUTPUT_MODE
+    return candidate
+
+
+class BatchFallbackCounter:
+    """Counts how often page-level batching degraded to one call per item.
+
+    `_translate_batch` sends a whole page's blocks (and separately its lines) as
+    ONE newline-joined request, then silently reverts to one request per item when
+    the reply does not come back with the same number of lines. The difference is
+    roughly 2 calls per page versus one per block plus one per line — for the
+    79-page sample in `data_samples/`, ~158 calls against ~3288 — and until this
+    counter existed nothing distinguished the two. A run that took twenty minutes
+    and a run that took one looked identical in the logs.
+
+    That matters most for the in-production experiment (#46): "it was slow" is not
+    actionable feedback, "it fell back on 61 of 79 pages because CUBBITT collapsed
+    the newlines" is.
+    """
+
+    __slots__ = ("batched", "fallback_mismatch", "fallback_error", "items_retried")
+
+    def __init__(self):
+        self.batched = 0
+        self.fallback_mismatch = 0
+        self.fallback_error = 0
+        self.items_retried = 0
+
+    @property
+    def fallbacks(self) -> int:
+        return self.fallback_mismatch + self.fallback_error
+
+    def as_dict(self) -> dict:
+        return {
+            "batched": self.batched,
+            "fallback_mismatch": self.fallback_mismatch,
+            "fallback_error": self.fallback_error,
+            "fallbacks": self.fallbacks,
+            "items_retried": self.items_retried,
+        }
+
+    def summary(self) -> str:
+        total = self.batched + self.fallbacks
+        return (
+            f"{self.batched}/{total} batch calls held their line count; "
+            f"{self.fallbacks} fell back to per-item requests "
+            f"({self.fallback_mismatch} line-count mismatch, {self.fallback_error} transport error), "
+            f"costing {self.items_retried} extra requests"
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Hardened parsers
@@ -110,6 +216,68 @@ def _resolve_namespaces(root) -> dict:
     return xpath_ns
 
 
+def _append_translation_sibling(elem, translated, src_lang, tgt_lang):
+    """Insert a translated sibling straight after *elem*, keeping the source intact.
+
+    The shape follows AMCR's own multilingual convention: the same tag, the same
+    attributes, distinguished by `xml:lang`. AMCR's thesaurus records a concept as
+    `<heslo xml:lang="cs">` beside `<heslo_en>` under one `@id`, and
+    `load_vocab.py:124-134` reads exactly that pair on every glossary build — so
+    this repo already CONSUMES append-shaped AMCR data while, in replace mode, it
+    emits replace-shaped output.
+
+    Attributes are copied rather than dropped. For the controlled-vocabulary
+    elements that carry `id="HES-…"`, the id identifies the CONCEPT, not the
+    string, so the English sibling belongs under the same one — dropping it would
+    leave the translation unattributable. `xml:lang` is the single exception: it
+    is overwritten with the target language, which is the whole point of the pair.
+
+    Returns the new element, or ``None`` when an equivalent sibling is already
+    present (see :func:`_already_appended`).
+    """
+    if _already_appended(elem, tgt_lang):
+        return None
+
+    sibling = etree.Element(elem.tag, nsmap=elem.nsmap)
+    for key, value in elem.attrib.items():
+        if key != XML_LANG:
+            sibling.set(key, value)
+    sibling.set(XML_LANG, tgt_lang)
+    sibling.text = translated
+
+    # Carry the source element's trailing whitespace onto the new node so the
+    # inserted line inherits the document's existing indentation. `pretty_print`
+    # is deliberately OFF for this writer (finding #10), so whitespace is ours to
+    # get right rather than the serialiser's.
+    sibling.tail = elem.tail
+
+    # A bilingual pair is only self-describing if BOTH halves are labelled. The
+    # three free-text fields this tool targets (nazev/popis/poznamka) carry no
+    # `xml:lang` in any of the 15 shipped AMCR samples, so without this the output
+    # would assert English on one element and nothing on its Czech twin.
+    if not elem.get(XML_LANG) and src_lang and src_lang != "auto":
+        elem.set(XML_LANG, src_lang)
+
+    elem.addnext(sibling)
+    return sibling
+
+
+def _already_appended(elem, tgt_lang) -> bool:
+    """True when *elem* is itself a translation, or already has one beside it.
+
+    This is the idempotency guard the tool has never had. In replace mode,
+    re-running over an `_en` output silently re-translates English into English —
+    with an explicit `--source_lang` there is not even language detection to
+    notice. Append mode can do better because its output is self-describing: the
+    `xml:lang` marker that makes the pair readable also makes a second pass a
+    no-op instead of a duplicate.
+    """
+    if elem.get(XML_LANG) == tgt_lang:
+        return True
+    nxt = elem.getnext()
+    return nxt is not None and nxt.tag == elem.tag and nxt.get(XML_LANG) == tgt_lang
+
+
 def process_metadata_xml(
     input_path,
     output_path,
@@ -123,7 +291,9 @@ def process_metadata_xml(
     doc=None,
     backend=None,
     doc_id=None,
+    output_mode=DEFAULT_OUTPUT_MODE,
 ):
+    output_mode = normalize_output_mode(output_mode)
     try:
         tree = etree.parse(str(input_path), parser=_SECURE_PARSER)
         root = tree.getroot()
@@ -139,6 +309,8 @@ def process_metadata_xml(
         log_doc_id = doc_id or canonical_doc_id(input_path)
 
         translated_texts = []
+        appended = 0
+        skipped_existing = 0
 
         for xpath in xpaths:
             try:
@@ -156,8 +328,24 @@ def process_metadata_xml(
                         else:
                             actual_src_lang = "cs"
 
+                    # Issue #46, the big question, decided here and nowhere else.
+                    # REPLACE overwrites the Czech text node; APPEND leaves it and
+                    # inserts a `xml:lang`-marked sibling beside it. Everything
+                    # upstream of this point is identical in both modes.
+                    if output_mode == OUTPUT_MODE_APPEND and _already_appended(elem, tgt_lang):
+                        # Second pass over an already-appended document: skip the
+                        # API call entirely rather than translate and discard.
+                        skipped_existing += 1
+                        continue
+
                     translated = translator.translate(original_text, actual_src_lang, tgt_lang)
-                    elem.text = translated
+
+                    if output_mode == OUTPUT_MODE_APPEND:
+                        _append_translation_sibling(elem, translated, actual_src_lang, tgt_lang)
+                        appended += 1
+                    else:
+                        elem.text = translated
+
                     translated_texts.append(translated)
 
                     if csv_writer:
@@ -191,6 +379,14 @@ def process_metadata_xml(
         # cannot silently drop the field). That is a feature, tracked as still-open; the
         # earlier citation here pointed at `agent_dev_logs/digests/13.digest.md`, which does
         # not exist in this repo.
+        if output_mode == OUTPUT_MODE_APPEND:
+            logger.info(
+                "%s: append mode wrote %d translated sibling(s); %d field(s) already carried one.",
+                log_doc_id,
+                appended,
+                skipped_existing,
+            )
+
         if doc is not None:
             doc.set_block(
                 "translations",
@@ -198,6 +394,11 @@ def process_metadata_xml(
                     "source_lang": src_lang,
                     "target_lang": tgt_lang,
                     "backend": backend or "lindat",
+                    # #46: which shape this artifact actually has. `additionalProperties`
+                    # is true on this block, so recording it needs no schema change —
+                    # and a consumer that finds English in a field needs to know whether
+                    # the Czech was kept beside it or overwritten.
+                    "output_mode": output_mode,
                 },
             )
 
@@ -324,6 +525,37 @@ def _align_tokens_proportional(block_text, source_line_texts):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def _label_alto_language(root, tgt_lang) -> int:
+    """Stamp the target language on ALTO text elements. Returns how many were touched.
+
+    ALTO 4 defines a ``LANG`` attribute on ``TextBlock``, ``TextLine`` and
+    ``String``; ALTO 3 defines ``language`` on ``TextBlock``. This writes ``LANG``
+    on the block level only — one attribute per block rather than per word, which
+    is where the claim is actually true: the block text IS a translation of the
+    block, while the per-``String`` split is manufactured (see the caller's
+    docstring).
+
+    Without this the output is unlabelled English. That is the defect worth fixing
+    regardless of which way the replace/append question is finally settled: a
+    consumer currently cannot distinguish a translated ALTO from a Czech original
+    except by reading the text.
+    """
+    if not tgt_lang:
+        return 0
+    touched = 0
+    # `root.iter()` yields comments and processing instructions as well as elements,
+    # and their `.tag` is a callable rather than a string — `etree.QName` raises
+    # ValueError on those. Real ALTO from a scanner routinely carries comments, so
+    # this guard is what keeps append mode from dying on ordinary production input.
+    for elem in root.iter():
+        if not isinstance(elem.tag, str):
+            continue
+        if etree.QName(elem).localname == "TextBlock":
+            elem.set("LANG", tgt_lang)
+            touched += 1
+    return touched
+
+
 def process_alto_xml(
     input_path,
     output_path,
@@ -336,6 +568,7 @@ def process_alto_xml(
     doc=None,
     backend=None,
     doc_id=None,
+    output_mode=DEFAULT_OUTPUT_MODE,
 ):
     """
     Translate an ALTO XML document in place (dual-pass reconstruction).
@@ -346,7 +579,26 @@ def process_alto_xml(
 
     *doc_id* is the caller's canonical doc_id for this document, used verbatim as the CSV
     log's ``file`` column; see the metadata-path twin for why it is passed in (D3).
+
+    OUTPUT MODE (issue #46). ALTO honours the flag by LABELLING, never by
+    duplicating. Appending a translation per ``String`` would be incoherent here:
+    the word-to-box correspondence in the output is manufactured by
+    :func:`_align_tokens_to_lines`, which splits ONE block translation on
+    whitespace and re-buckets it by ``difflib`` similarity — so a per-``String``
+    English "alternative" would not be an alternative reading of that word, it
+    would be whichever token the bucketing happened to land there. Duplicating it
+    would multiply a fiction rather than preserve evidence.
+
+    What append mode does instead is make the artifact honest about itself: the
+    target language is stamped on the text elements and a processing step is
+    recorded, so a consumer can tell the file is machine-translated English rather
+    than inferring it by reading. The ``String`` inventory stays 1:1 with the
+    source in BOTH modes. See ``agent_dev_logs/digests/46.digest.md`` for the
+    measurement behind this (224 blanked and 304 over-filled boxes of 7229 on the
+    shipped sample, none resized).
     """
+    output_mode = normalize_output_mode(output_mode)
+    fallback_counter = BatchFallbackCounter()
     try:
         # D3: one doc_id per document, supplied by the caller (main.py) or derived through
         # the shared canonical_doc_id() — never hand-rolled here. See process_metadata_xml.
@@ -449,14 +701,36 @@ def process_alto_xml(
 
                     # Validate the layout structure matches original elements exactly
                     if len(translated_lines) == len(valid_texts):
+                        fallback_counter.batched += 1
                         results = [""] * len(texts)
                         for idx, res_line in zip(valid_indices, translated_lines):
                             results[idx] = res_line
                         return results
-                except Exception:
-                    pass
+
+                    # The model answered, but collapsed or added newlines, so the
+                    # reply cannot be mapped back onto the layout. Counted, not
+                    # silent: this is the common degradation and it is invisible in
+                    # the output — only the wall-clock changes (issue #46).
+                    fallback_counter.fallback_mismatch += 1
+                    logger.debug(
+                        "Batch line count %d != %d expected; retrying %d item(s) individually.",
+                        len(translated_lines),
+                        len(valid_texts),
+                        len(valid_texts),
+                    )
+                except Exception as exc:
+                    # Was `except Exception: pass`. Swallowing the reason is what
+                    # made a 20x slowdown indistinguishable from a fast run.
+                    fallback_counter.fallback_error += 1
+                    logger.warning(
+                        "Batch translation call failed (%s: %s); retrying %d item(s) individually.",
+                        type(exc).__name__,
+                        exc,
+                        len(valid_texts),
+                    )
 
                 # Safe fallback: revert to 1-by-1 requests for this batch if layout breaks
+                fallback_counter.items_retried += len(valid_texts)
                 return [translator.translate(t, lang, tgt_lang) if t.strip() else "" for t in texts]
 
             for lang, group in lang_groups.items():
@@ -528,6 +802,25 @@ def process_alto_xml(
             if num_blocks > 0:
                 print()
 
+        # Throughput reality, reported once per document. A run that batched cleanly
+        # and a run that fell back on every page differ by an order of magnitude in
+        # LINDAT calls and by nothing at all in the output — this line is the only
+        # place that difference is visible (issue #46).
+        if fallback_counter.fallbacks:
+            logger.warning("%s: %s.", log_doc_id, fallback_counter.summary())
+        else:
+            logger.info("%s: %s.", log_doc_id, fallback_counter.summary())
+
+        if output_mode == OUTPUT_MODE_APPEND:
+            labelled = _label_alto_language(root, tgt_lang)
+            logger.info(
+                "%s: append mode labelled %d ALTO element(s) as '%s'. Per-String append is "
+                "deliberately not implemented — see process_alto_xml's docstring.",
+                log_doc_id,
+                labelled,
+                tgt_lang,
+            )
+
         # ATRIUM Document JSON accretion update for ALTO blocks. See the metadata-path
         # twin above for why `translations` carries language-pair metadata (not the
         # translated corpus text), and for the state of `entities[].translation_en` — a
@@ -539,6 +832,15 @@ def process_alto_xml(
                     "source_lang": src_lang,
                     "target_lang": tgt_lang,
                     "backend": backend or "lindat",
+                    # Batch-vs-fallback telemetry deliberately does NOT go here.
+                    # `translations` is a schema-governed block in a record shared
+                    # across all six repos; per-run throughput counts are transient
+                    # diagnostics, not a durable fact about the document. They are
+                    # reported on the log stream instead (see the summary above),
+                    # which is where an operator running the #46 experiment reads
+                    # them. ParadataLogger has no per-document fact API to put them
+                    # in — only skips, successes and components.
+                    "output_mode": output_mode,
                 },
             )
 

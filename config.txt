@@ -29,6 +29,22 @@ vocabulary = data_samples/vocabulary.csv
 # Overridden by --backend on the CLI and by the TRANSLATION_BACKEND env var.
 translation_backend = lindat
 
+# Output mode (issue #46) — how the translation is written into the document.
+#   replace -> (default) overwrite the source-language field. The output is a
+#              monolingual mirror of the input; the source text survives only in
+#              the sidecar *_log.csv.
+#   append  -> keep the source field and insert an xml:lang-marked sibling right
+#              after it, the same shape AMCR's own thesaurus uses for
+#              heslo / heslo_en. Re-running is then a no-op instead of a
+#              double-translation, because the marker makes the pair detectable.
+#              ALTO LABELS rather than duplicates: per-String append would be
+#              meaningless there, since the word-to-box alignment in the output is
+#              manufactured by the block-translation bucketing, not observed.
+# Overridden by --output-mode on the CLI and by the OUTPUT_MODE env var.
+# Run append with --xsd the first time against real AMCR data: whether the schema
+# permits the repeated element (maxOccurs) is still open, and the validator settles it.
+output_mode = replace
+
 # Backing service endpoints (atrium-project#63). Both are attachable: point them
 # at a self-hosted UDPipe 2 / translation service, or a local stub, with no code
 # change. They are environment variables, not keys in this file, because they

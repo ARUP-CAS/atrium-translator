@@ -477,6 +477,63 @@ vocabulary = data_samples/vocabulary.csv
 * `--vocabulary`: Path to a CSV vocabulary file (`source_lemma,target_translation`) to activate Tag-and-Protect term overriding.
 * `--backend`: Translation backend — `lindat` (default, LINDAT CUBBITT) or `openai_compatible` (any OpenAI-compatible LLM API, configured via the `LLM_*` variables). Resolution order: this flag → `translation_backend` in `config.txt` → `TRANSLATION_BACKEND` → `lindat`. See [docs/translation-backends.md](docs/translation-backends.md) 📎.
 * `--fast-align`: ALTO only. Distribute block tokens by source word count instead of translating each line as an anchor — far fewer API calls, slightly coarser line splits.
+* `--output-mode`: `replace` (default) or `append` — how the translation is written into the document. See [Output mode](#output-mode-replace-vs-append) below. Resolution order: this flag → `output_mode` in `config.txt` → `OUTPUT_MODE` → `replace`.
+
+### Output mode: replace vs. append
+
+The tool can write a translation into a document two ways. This is
+[issue #46](https://github.com/ufal/atrium-translator/issues/46)'s central question, and it is a
+switch rather than a decision baked into the code, so a real corpus can settle it.
+
+| Mode                  | What the output contains                                                                                                                                                                                                     |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `replace` *(default)* | The source-language field is **overwritten**. The output is a monolingual mirror of the input; the original text survives only in the sidecar `*_log.csv`. This is what the tool has always done — the default is unchanged. |
+| `append`              | The source field is **kept**, and a sibling element carrying `xml:lang="<target>"` is inserted directly after it. The source element is stamped with its own `xml:lang` too, so both halves of the pair are labelled.        |
+
+Append follows AMCR's own multilingual convention rather than inventing one: an AMCR thesaurus
+record stores a concept as `<amcr:heslo xml:lang="cs">` beside `<amcr:heslo_en>` under one `@id`, and
+`load_vocab.py` reads exactly that pair on every glossary build.
+
+```bash
+python main.py ./data_samples/my_documents \
+    --xpaths amcr-fields.txt --source_lang cs \
+    --output-mode append \
+    --xsd https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd
+```
+
+**Run append with `--xsd` the first time.** Whether the AMCR schema permits the repeated element
+(its `maxOccurs`) is still an open question, and the validator answers it directly. A validation
+failure there is the answer, not a defect in this feature.
+
+**ALTO labels rather than duplicates.** In append mode an ALTO document gets `LANG` on its
+`TextBlock` elements and keeps a `String` inventory identical to the source. Appending a translation
+per `String` would be incoherent: the word-to-box correspondence in the output is manufactured by
+splitting one block translation on whitespace and re-bucketing it, so a per-word "alternative" is
+whichever token the bucketing happened to land there — not a reading of that box.
+
+Append mode is also **idempotent**: because its output is self-describing, a second pass over an
+already-translated document skips those fields instead of translating English into English.
+
+The effective mode is recorded in the paradata record and in the document record's `translations`
+block, so an artifact always says which contract produced it.
+
+### Metadata mode through the HTTP API
+
+`POST /translate` needs XPath targets for metadata mode, the same list the CLI reads from
+`config.txt`'s `fields =` key. The service reads it from `AMCR_FIELDS_PATH` (default
+`amcr-fields.txt`, already present in the image). With no readable file, ALTO requests are
+unaffected and metadata requests are refused with `422` naming the variable — never a `200`
+carrying an untranslated document.
+
+```bash
+curl -s -X POST localhost:8000/translate \
+     -F "file=@C-N1000019.xml" -F "is_alto=false" \
+     -F "source_lang=cs" -F "output_mode=append"
+```
+
+`is_alto`, `source_lang`, `target_lang` and `output_mode` are accepted **either** as multipart form
+fields or as query-string parameters.
+
 * `--document-json`: Optional baseline ATRIUM Document JSON to accrete onto (the cross-tool record passed along the pipeline).
 * `--document-json-out`: Destination path for the updated ATRIUM Document JSON.
 * `--download-dir`: Directory for URL-ingested inputs (default: `<output>/downloaded_inputs`).

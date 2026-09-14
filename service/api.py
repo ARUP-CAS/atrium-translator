@@ -14,7 +14,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 
 from atrium_paradata import ParadataLogger
@@ -23,6 +23,7 @@ from processors.backend import get_backend
 from processors.chunking import DEFAULT_CHUNK_SIZE
 from processors.identifier import LanguageIdentifier
 from processors.translator import resolve_translation_url
+from utils import DEFAULT_OUTPUT_MODE, normalize_output_mode
 
 # Shared ATRIUM meta-contract helpers (§4). Byte-identical across every service,
 # enforced by para-drift.reusable.yml.
@@ -115,6 +116,56 @@ models = {}
 _state = ServiceState()
 
 
+#: Where the metadata-mode XPath targets come from. The batch CLI reads the same
+#: list from config.txt's `fields =` key (main.py:345-346); the service reads an env
+#: var instead, because the service's whole config surface is environment-based
+#: (12-factor III) and config.txt is a CLI-local artifact. `COPY . .` in the
+#: Dockerfile already ships amcr-fields.txt to /app, so the default resolves inside
+#: the published image with nothing to mount.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+AMCR_FIELDS_PATH = os.getenv("AMCR_FIELDS_PATH", "amcr-fields.txt")
+
+
+def _as_bool(raw, *, default: bool) -> bool:
+    """Parse a query-string boolean the way FastAPI parses a form one.
+
+    Kept deliberately narrow: anything unrecognised falls back to *default* rather
+    than raising, so a typo in a query string cannot 500 a request that would
+    otherwise have run in the default mode.
+    """
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _load_xpaths(path_value: str) -> list[str]:
+    """Parse the XPath targets file, using the same rule as the CLI.
+
+    Returns [] and logs rather than raising when the file is missing: the API image
+    also serves ALTO mode, which needs no XPaths at all, so an absent file must not
+    crash-loop a pod that is about to do perfectly valid work. Metadata requests are
+    refused individually instead — see `translate_document`.
+    """
+    candidate = Path(path_value)
+    if not candidate.is_absolute():
+        candidate = _REPO_ROOT / candidate
+    if not candidate.is_file():
+        logger.warning(
+            "AMCR_FIELDS_PATH=%r does not resolve to a file (looked at %s); "
+            "metadata-mode /translate requests will be refused.",
+            path_value,
+            candidate,
+        )
+        return []
+    with open(candidate, "r", encoding="utf-8") as fh:
+        return [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Backend selected via the TRANSLATION_BACKEND env var (default: lindat).
@@ -124,6 +175,13 @@ async def lifespan(app: FastAPI):
     logger.info("Warming up translation backend (%s)", backend or "lindat")
     models["translator"] = get_backend(backend, vocab_path=None)
     models["identifier"] = LanguageIdentifier()
+    # Metadata-mode XPath targets, read once here rather than per request — the same
+    # warm-cache treatment the backend and identifier get. Before this existed the
+    # endpoint passed a hard-coded empty list to process_single_file, so every
+    # `is_alto=false` upload came back HTTP 200 with the document untranslated
+    # (issue #46).
+    models["xpaths_list"] = _load_xpaths(AMCR_FIELDS_PATH)
+    logger.info("Loaded %d metadata XPath target(s) from %r", len(models["xpaths_list"]), AMCR_FIELDS_PATH)
     _state.warm = True
     # issue #55: composes with the warmup above rather than replacing it. Flips /ready to
     # 503 on SIGTERM and — the reason ordering matters here — waits for in-flight requests
@@ -206,15 +264,55 @@ async def translate_document(
     request: Request,
     file: UploadFile = File(...),
     document_json: UploadFile = File(None, description="Optional baseline ATRIUM Document JSON (accretion model)"),
-    source_lang: str = "auto",
-    target_lang: str = "en",
-    is_alto: bool = True,
+    # Declared as Form(None) and resolved against the query string below, because
+    # callers are genuinely split and both shapes must keep working.
+    #
+    # A bare `is_alto: bool = True` on a POST binds from the QUERY STRING only, so
+    # the `data={"is_alto": ...}` this repo's own tests send was silently discarded
+    # and the default won — invisible because every test passed "true", which is
+    # also the default. But other callers (test_translate_real_pipeline_keeps_the_
+    # multi_dot_doc_id) pass `?source_lang=cs` in the query and rely on it being
+    # read. Binding strictly to either source breaks the other half. (issue #46)
+    source_lang: str = Form(None),
+    target_lang: str = Form(None),
+    is_alto: bool = Form(None),
+    output_mode: str = Form(None, description="replace | append — see issue #46"),
 ):
     _refuse_if_draining()
+
+    qp = request.query_params
+    source_lang = source_lang or qp.get("source_lang") or "auto"
+    target_lang = target_lang or qp.get("target_lang") or "en"
+    if is_alto is None:
+        is_alto = _as_bool(qp.get("is_alto"), default=True)
+
+    # CLI precedence, mirrored: explicit request field wins, then OUTPUT_MODE, then
+    # the shipped default. An unrecognised value degrades to the default with a
+    # warning rather than 4xx — the effective mode is recorded in paradata and in the
+    # document record either way, so the run is never ambiguous about what it made.
+    effective_output_mode = normalize_output_mode(
+        output_mode or qp.get("output_mode") or os.getenv("OUTPUT_MODE") or DEFAULT_OUTPUT_MODE,
+        source="output_mode",
+    )
 
     if not file.filename or not file.filename.endswith(".xml"):
         # §4.4: unusable/invalid input is 422 (harmonized from 400).
         raise HTTPException(status_code=422, detail="Only XML files are supported.")
+
+    # Metadata mode with no XPath targets cannot translate anything. It used to
+    # return 200 and an unchanged document, which is the worst possible answer: the
+    # caller has no way to tell a successful no-op from a successful translation.
+    # Refuse explicitly instead (issue #46).
+    xpaths_list = models.get("xpaths_list") or []
+    if not is_alto and not xpaths_list:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Metadata mode requires XPath targets, and none are configured. "
+                f"Set AMCR_FIELDS_PATH (currently {AMCR_FIELDS_PATH!r}) to a readable "
+                "file listing one XPath per line, or send is_alto=true for ALTO input."
+            ),
+        )
 
     _reject_oversized_envelope(request)
     content = await _read_bounded(file, MAX_UPLOAD_BYTES, "File")
@@ -268,6 +366,7 @@ async def translate_document(
             document_json=doc_json_path,
             document_json_out=doc_json_out_path,
             backend=backend_name,
+            output_mode=effective_output_mode,
         )
 
         # ALTO vs standard XML naming preservation
@@ -282,6 +381,7 @@ async def translate_document(
             "source_lang": source_lang,
             "target_lang": target_lang,
             "mode": "alto" if is_alto else "metadata",
+            "output_mode": effective_output_mode,
             "chunk_limit": DEFAULT_CHUNK_SIZE,
             "translation_backend": backend_name,
         }
@@ -323,7 +423,7 @@ async def translate_document(
                 args=args,
                 translator=models["translator"],
                 identifier=models["identifier"] if source_lang == "auto" else None,
-                xpaths_list=[],
+                xpaths_list=xpaths_list,
                 _logger=logger,
             )
 
