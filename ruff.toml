@@ -1,8 +1,8 @@
 # Base Ruff configuration for ATRIUM tools
 #
-# Aligned with atrium-project docs/templates/ruff.toml, which is a FLOOR rather
-# than a ceiling: `target-version` and the "B" (flake8-bugbear) rules below are a
-# deliberate superset, matching alto-postprocess, nlp-enrich and llm-enrich.
+# Aligned with atrium-project docs/templates/ruff.toml: `target-version` (now
+# declared there too) and the "B" (flake8-bugbear) rules below match
+# alto-postprocess, nlp-enrich and llm-enrich.
 #
 # target-version pins the syntax Ruff lints against to the version this repo
 # actually ships -- every image is python:3.11-slim. It had been unset, so the
