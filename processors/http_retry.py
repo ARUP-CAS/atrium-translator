@@ -23,11 +23,18 @@ Design
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 from typing import Callable, Iterable, Optional
 
 import requests
+
+# (12-factor XI) Library module: getLogger only. The root logger is configured in
+# exactly one place, service/api.py's __main__ block. The retry warning below used
+# to be a print(), which meant the one diagnostic a partner needs while a backend is
+# failing was the one they could not level, filter or silence. (issue #61)
+logger = logging.getLogger(__name__)
 
 # Default HTTP status codes worth retrying (transient server / rate-limit).
 DEFAULT_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -78,9 +85,6 @@ def request_with_retry(
     retryable = set(retryable_status)
     last_reason = "unknown error"
 
-    max_retries = max(10, max_retries)
-    backoff_base_s = max(2, backoff_base_s)
-
     for attempt in range(max_retries + 1):
         if throttle is not None:
             throttle()
@@ -98,9 +102,13 @@ def request_with_retry(
 
         if attempt < max_retries:
             sleep_s = backoff_base_s * (2**attempt) + random.uniform(0, 0.25)
-            print(
-                f"[WARN] {label} failed ({last_reason}); retrying in "
-                f"{sleep_s:.1f}s (attempt {attempt + 1}/{max_retries})."
+            logger.warning(
+                "%s failed (%s); retrying in %.1fs (retry %d/%d).",
+                label,
+                last_reason,
+                sleep_s,
+                attempt + 1,
+                max_retries,
             )
             time.sleep(sleep_s)
 

@@ -78,8 +78,9 @@ python3 scripts/atrium_translate.py --info
 ### 3. ATRIUM Document JSON accretion (optional)
 
 Translator accretes onto an existing baseline record — it does not originate one, since
-it is never the first pipeline stage (accretion contract, `docs/document_schema.md` in the
-hub repo):
+it is never the first pipeline stage (accretion contract:
+[docs/document_schema.md](https://github.com/ufal/atrium-project/blob/test/docs/document_schema.md)
+in the hub repo):
 
 ```bash
 python3 scripts/atrium_translate.py page.alto.xml --document-json in.document.json \

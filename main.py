@@ -33,7 +33,14 @@ from atrium_paradata import ParadataLogger
 from processors.backend import TranslationBackend, get_backend
 from processors.chunking import DEFAULT_CHUNK_SIZE
 from processors.identifier import LanguageIdentifier
-from utils import load_xsd, process_alto_xml, process_metadata_xml
+from utils import (
+    DEFAULT_OUTPUT_MODE,
+    OUTPUT_MODES,
+    load_xsd,
+    normalize_output_mode,
+    process_alto_xml,
+    process_metadata_xml,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -42,22 +49,48 @@ from utils import load_xsd, process_alto_xml, process_metadata_xml
 
 def _build_paradata_config(args, config: configparser.ConfigParser) -> dict:
     """Return a JSON-serialisable snapshot of all run-time parameters."""
-    return {
+    backend_name = str(getattr(args, "backend", "") or "lindat")
+
+    cfg = {
         "input_path": str(args.input_path),
         "output_dir": str(args.output or config.get("DEFAULT", "output", fallback="")),
         "source_lang": str(args.source_lang),
         "target_lang": str(args.target_lang),
         "formats": str(args.formats),
         "mode": "alto" if args.alto else "metadata",
-        "translation_backend": str(getattr(args, "backend", "") or "lindat"),
+        # #46: replace vs append is an output-CONTRACT choice, so it belongs in the
+        # provenance record — a consumer holding the artifact needs to know whether
+        # the source-language text was kept beside the translation or overwritten.
+        "output_mode": str(getattr(args, "output_mode", DEFAULT_OUTPUT_MODE) or DEFAULT_OUTPUT_MODE),
+        "translation_backend": backend_name,
         "xpaths_file": str(args.xpaths or ""),
         "xsd_url": str(args.xsd or ""),
         "vocabulary": str(args.vocabulary or ""),
         "chunk_limit": DEFAULT_CHUNK_SIZE,
         "lang_id_model": "facebook/fasttext-language-identification",
-        "translation_api": "https://lindat.mff.cuni.cz/services/translation/api/v2/",
-        "fasttext_confidence_threshold": 0.2,
     }
+
+    # Two fixes to one line (atrium-project#63):
+    #
+    # 1. The guard. This field was recorded unconditionally, so every CLI run on
+    #    the LLM or CT2 backend claimed a LINDAT endpoint it never contacted.
+    #    service/api.py has had the backend guard since finding M1; the CLI path
+    #    never got it.
+    # 2. The value. Resolved through the same function LindatTranslator uses, so
+    #    the record names the host the run actually calls once the endpoint is
+    #    configurable — paradata is a provenance claim, and one that is
+    #    confidently wrong is worse than one that is absent.
+    #
+    # Imported inside the function: the translator instance does not exist until
+    # later in main(), and a module-level import here would pull requests/tqdm
+    # into every run regardless of backend.
+    if backend_name == "lindat":
+        from processors.translator import resolve_translation_url
+
+        cfg["translation_api"] = resolve_translation_url().rstrip("/") + "/"
+
+    cfg["fasttext_confidence_threshold"] = 0.2
+    return cfg
 
 
 #: (atrium-project#10, D4) One-shot latch for the "validation is unavailable" warning.
@@ -288,6 +321,20 @@ def parse_arguments():
         help="Directory for URL-ingested inputs (default: <output>/downloaded_inputs).",
     )
     parser.add_argument(
+        "--output-mode",
+        type=str,
+        choices=list(OUTPUT_MODES),
+        default=None,
+        help=(
+            "How the translation is written into the document (issue #46). "
+            "'replace' (default) overwrites the source-language field. "
+            "'append' keeps it and adds an xml:lang-marked sibling beside it, "
+            "following AMCR's own heslo/heslo_en convention. ALTO labels rather "
+            "than duplicates in append mode. Precedence: this flag, then "
+            "config.txt's 'output_mode', then the OUTPUT_MODE env var, then 'replace'."
+        ),
+    )
+    parser.add_argument(
         "--fast-align",
         action="store_true",
         help="ALTO only: distribute block tokens by source word count instead of "
@@ -322,6 +369,15 @@ def parse_arguments():
         args.backend = defaults.get("translation_backend") or os.environ.get("TRANSLATION_BACKEND") or "lindat"
     if args.xpaths is None and "fields" in defaults:
         args.xpaths = Path(defaults["fields"])
+    if args.output_mode is None:
+        # Same precedence chain as --backend: CLI wins, then config.txt, then the
+        # environment, then the shipped default. OUTPUT_MODE is read here as well
+        # as in the service so a containerised BATCH run can set the mode without
+        # rewriting config.txt (12-factor III).
+        args.output_mode = normalize_output_mode(
+            defaults.get("output_mode") or os.environ.get("OUTPUT_MODE") or DEFAULT_OUTPUT_MODE,
+            source="output_mode",
+        )
 
     if args.vocabulary is None and "vocabulary" in defaults:
         vocab_candidate = Path(defaults["vocabulary"])
@@ -431,6 +487,7 @@ def process_single_file(
                         doc=doc,
                         backend=args.backend,
                         doc_id=doc_id,
+                        output_mode=getattr(args, "output_mode", DEFAULT_OUTPUT_MODE),
                     )
                 else:
                     process_metadata_xml(
@@ -446,6 +503,7 @@ def process_single_file(
                         doc=doc,
                         backend=args.backend,
                         doc_id=doc_id,
+                        output_mode=getattr(args, "output_mode", DEFAULT_OUTPUT_MODE),
                     )
 
                 # Append derived step outputs and licenses to the accretion model
@@ -479,7 +537,21 @@ def process_single_file(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def main():
+# ── Process exit codes ────────────────────────────────────────────────────────
+# main() used to `return` on every failure path with no sys.exit anywhere, so the
+# process exited 0 whatever happened: a Kubernetes Job or cron wrapper around the
+# batch image reported SUCCESS for a run that translated nothing. These mirror the
+# vocabulary the ecosystem already publishes for its agent-skill clients
+# (atrium-project docs/agent_skill_strategy.md): 0 ok, 1 usage/input, and a
+# distinct code per outcome a caller would want to branch on.
+EXIT_OK = 0
+EXIT_USAGE = 1  # bad arguments, missing input path, unloadable XSD
+EXIT_NO_INPUT = 2  # arguments were fine; nothing matched the allowed formats
+EXIT_FAILED = 3  # one or more documents failed to process
+
+
+def main() -> int:
+    """Run the batch pipeline; return a process exit code (see EXIT_* above)."""
     args, config = parse_arguments()
 
     print(f"\n{'=' * 60}")
@@ -489,7 +561,7 @@ def main():
     input_path = args.input_path
     if not input_path or (not input_path.is_dir() and not input_path.is_file()):
         print("[ERROR] Input path does not exist. Provide a valid file or directory.")
-        return
+        return EXIT_USAGE
 
     out_dir = args.output or Path.cwd() / f"translated_{args.target_lang}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -502,7 +574,7 @@ def main():
     ) as _logger:
         if not args.alto and not args.xpaths:
             print("[ERROR] Specify either the --alto flag or provide --xpaths / 'fields' in config.")
-            return
+            return EXIT_USAGE
 
         translator = get_backend(args.backend, vocab_path=args.vocabulary)
         identifier = LanguageIdentifier() if args.source_lang == "auto" else None
@@ -529,7 +601,7 @@ def main():
                 xsd_schema = load_xsd(args.xsd)
             except Exception as exc:
                 print(f"[ERROR] XSD schema load failed: {exc}")
-                return
+                return EXIT_USAGE
 
         # ── Collect files to process ───────────────────────────────────
         files_to_process: list[Path] = []
@@ -563,11 +635,12 @@ def main():
 
         if not files_to_process:
             print(f"[WARN] No files found matching allowed formats ({args.formats}).")
-            return
+            return EXIT_NO_INPUT
 
         # ── Process each file ──────────────────────────────────────────
         total_inputs = len(files_to_process)
         is_batch = input_path.is_dir() or (input_path.suffix == ".txt")
+        failed_files: list[str] = []
 
         for i, file_path in enumerate(files_to_process, 1):
             print(f"\n[FILE {i}/{total_inputs}] Processing: {file_path.name}")
@@ -583,6 +656,9 @@ def main():
                 _logger=_logger,
                 xsd_schema=xsd_schema,
             )
+
+            if not success:
+                failed_files.append(file_path.name)
 
             if success and not _components_logged:
                 # Record the components the *selected* backend actually exercised
@@ -631,6 +707,15 @@ def main():
     print(" PROCESSING COMPLETE ".center(60, "="))
     print(f"{'=' * 60}\n")
 
+    if failed_files:
+        # Per-file failures are caught and logged inside process_single_file so one
+        # bad document does not abandon the batch. That is the right behaviour and
+        # it stays -- but it must not also be invisible to the caller.
+        print(f"[ERROR] {len(failed_files)}/{total_inputs} document(s) failed: {', '.join(failed_files)}")
+        return EXIT_FAILED
+
+    return EXIT_OK
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
