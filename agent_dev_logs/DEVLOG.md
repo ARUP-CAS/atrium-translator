@@ -1,7 +1,9 @@
 # 📓 atrium-translator — agent_dev_logs/DEVLOG.md (timeline index)
-> _XML in-place translation. 1 open issue (#4). `test` HEAD `b4fac57` (2026-09-13) · **v0.10.5**, pre-production
-> hardening staged for the next tag. Twelve-factor detail: `digests/12factor.digest.md` · `plans/12factor.plan.md`._
-> _Per-issue detail: `digests/4.digest.md` · `plans/4.plan.md` · `issues/` export (source of truth). Cross-repo/hub
+> _XML in-place translation. 2 open issues (#4, #46). `test` HEAD `03fc15d` (2026-09-15) · **v1.1.0-beta**,
+> released green after the base-image security fix (see 2026-09-13 below). Twelve-factor detail lives in the hub:
+> `ufal/atrium-project/agent_dev_logs/{digests,plans}/53.*` — the `digests/12factor.*` / `plans/12factor.*` this
+> line used to cite were never written._
+> _Per-issue detail: `digests/{4,46}.digest.md` · `plans/{4,46}.plan.md` · `issues/` exports (source of truth). Cross-repo/hub
 > history lives in `ufal/atrium-project/agent_dev_logs/DEVLOG.md` (deduplicated out of this file)._
 
 ## 2026-06-20
@@ -120,7 +122,7 @@ test yet catches.
 
 Five of `ufal/atrium-project#53`'s sub-issues were implemented here in six days, straight onto `test` — no PR, so
 nothing auto-closed or referenced them and every one still reads `open`. Recorded here because the issue tracker
-does not record it. Full audit in `digests/12factor.digest.md`.
+does not record it. Full audit in the hub's `agent_dev_logs/digests/53.digest.md`.
 
 * **`e731e55` (09-07) — factor IX, hub #55.** The `api` Dockerfile stage, so a runnable API image exists to publish
 at all: before this the service was reachable only through a compose `entrypoint:` override on the batch image.
@@ -140,11 +142,40 @@ the container reported unhealthy forever. `ENTRYPOINT ["python", "-m", "service.
 * **`8aeac5f`..`8ed9fc8` (09-12) — factor XI, hub #61.** The logging contract: one `basicConfig` in `__main__`,
 stdout, `LOG_LEVEL`, and the vendored `tests/test_logging_contract.py` guarding it by AST rather than at runtime.
 
+## 2026-09-13→15: the base image blocked a release, twice, in two repos
+
+Not a code defect — a defect in what the build *inherits*. `python:3.11-slim` is a floating tag and nothing in this
+ecosystem bumps it (no repo declares a `docker` dependabot ecosystem; `docker_gha_roadmap.md` H6), so the base layer
+is whatever Docker Hub last rebuilt. On 2026-09-13 that layer carried `perl-base` 5.40.1-6 with three FIXABLE
+CRITICAL CVEs — CVE-2026-13221, CVE-2026-42496, CVE-2026-8376, all fixed upstream in 5.40.1-6+deb13u1.
+
+The hub's release gate (`docker-tool.reusable.yml`, "Fail the release on fixable CRITICAL vulnerabilities") blocks
+exactly that class, and because the promotion step is `if: success()`, **a blocked release still publishes — by
+digest only, with no `:<version>` and no `:latest` tag**. That is what happened to `v1.0.0-beta` here, on both
+matrix targets.
+
+Two things made it hard to see, and both are worth remembering:
+
+* **The gate is `if: startsWith(github.ref, 'refs/tags/')`.** The identical commit passes on `master` and on `test`.
+  Only a release is stopped, so the failure appears at the worst possible moment and never during development.
+* **A cache-served apt layer looks correct and patches nothing.** The build uses `cache-from: type=gha`, so the
+  `apt-get upgrade` had to sit *below* the `ENV` block embedding `ATRIUM_RUNNER_REF` — CI passes that as
+  `github.ref_name`, unique per release tag, which busts the layer on every release and only on a release.
+  `tests/test_dockerfile_security_layer.py` pins that ordering, because it is invisible on inspection.
+
+`v1.1.0-beta` (`d0c1572`) released green on 2026-09-14 with the fix — run 34865984128, gate and promotion both
+green on both targets. **This repo was the only one that got the fix.** On 2026-09-15 `atrium-nlp-enrich` hit the
+identical three CVEs on `v0.20.2` (run 34970419474) across all three of its matrix targets, for the same reason.
+The layer has since been ported to the remaining four repos and the test promoted to a para-drift canonical file
+(`docs/templates/shared/MANIFEST.json` row 17), so a repo that loses it goes red before a release rather than
+during one. (atrium-project#53)
+
 ## 2026-09-13: pre-production hardening
 
 Prompted by a production-readiness review rather than by a filed issue. Five defects that the test strategy could
 not see, because each lived in a place the suite was structurally not looking at; each fix was confirmed by
-reintroducing the defect and watching the new guard go red. Detail and evidence in `digests/12factor.digest.md`.
+reintroducing the defect and watching the new guard go red. Detail and evidence in the hub's
+`agent_dev_logs/digests/53.digest.md` (the `digests/12factor.digest.md` this line used to cite was never written).
 
 * **The retry policy was not configuration.** `http_retry.py` clamped its own arguments *upward*
 (`max_retries = max(10, max_retries)`), so `LINDAT_MAX_RETRIES`, `LINDAT_BACKOFF_BASE_S` and their `LLM_*` twins
