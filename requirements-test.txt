@@ -14,7 +14,7 @@ huggingface-hub
 # requirements.txt — declared here EXPLICITLY rather than relying on openapi-spec-validator
 # pulling it in transitively, so the Layer D tests exercise the real gate instead of its
 # jsonschema-missing degraded branch the day that transitive edge disappears.
-jsonschema
+jsonschema==4.26.0
 # API meta-contract test deps (issue #32).
 openapi-spec-validator
 # tests/test_release_bundle.py parses .github/workflows/release.yml to check the

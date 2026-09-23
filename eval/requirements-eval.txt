@@ -3,7 +3,8 @@
 # The harness runs without these (it falls back to reference-less heuristic QE and
 # terminology hit-rate), but installs them to enable reference-based scoring:
 #   - sacrebleu : chrF / BLEU when --refs is supplied
-#   - unbabel-comet : COMET / COMET-QE (heavy; pulls torch) when available
+#   - unbabel-comet : COMET when --refs is supplied (--comet-model), COMET-QE with
+#     --comet-qe-model (heavy; pulls torch; checkpoints download from Hugging Face)
 #
 #     pip install -r eval/requirements-eval.txt
 sacrebleu>=2.6.0

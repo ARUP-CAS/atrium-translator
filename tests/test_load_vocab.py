@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -398,7 +400,9 @@ def test_cli_writes_the_merged_csv(tmp_path, monkeypatch):
     monkeypatch.setattr(
         load_vocab, "harvest_amcr_records", lambda delay=0.3: {"mohyla": load_vocab.VocabEntry("barrow")}
     )
-    monkeypatch.setattr(load_vocab, "harvest_teater_records", lambda: {"sidliste": load_vocab.VocabEntry("settlement")})
+    monkeypatch.setattr(
+        load_vocab, "harvest_teater_records", lambda delay=0.3: {"sidliste": load_vocab.VocabEntry("settlement")}
+    )
 
     assert load_vocab.main(["--out", str(out)]) == 0
 
@@ -410,7 +414,7 @@ def test_cli_can_skip_a_source(tmp_path, monkeypatch):
     out = tmp_path / "vocab.csv"
     called = {"teater": False}
 
-    def _teater():
+    def _teater(delay=0.3):
         called["teater"] = True
         return {}
 
@@ -435,7 +439,236 @@ def test_cli_reports_an_empty_harvest_without_writing(tmp_path, monkeypatch):
     out.write_text("source_lemma,target_translation,source,source_id,uri\nmohyla,barrow,,,\n", encoding="utf-8")
 
     monkeypatch.setattr(load_vocab, "harvest_amcr_records", lambda delay=0.3: {})
-    monkeypatch.setattr(load_vocab, "harvest_teater_records", dict)
+    monkeypatch.setattr(load_vocab, "harvest_teater_records", lambda delay=0.3: {})
 
     assert load_vocab.main(["--out", str(out)]) == 2
     assert "mohyla" in out.read_text(encoding="utf-8"), "an empty harvest overwrote the existing CSV"
+
+
+def test_cli_delay_paces_both_sources(tmp_path, monkeypatch):
+    """--delay reaches the TEATER harvest too, not only AMCR's page loop."""
+    seen = {}
+
+    def _amcr(delay=0.3):
+        seen["amcr"] = delay
+        return {"mohyla": load_vocab.VocabEntry("barrow")}
+
+    def _teater(delay=0.3):
+        seen["teater"] = delay
+        return {}
+
+    monkeypatch.setattr(load_vocab, "harvest_amcr_records", _amcr)
+    monkeypatch.setattr(load_vocab, "harvest_teater_records", _teater)
+
+    assert load_vocab.main(["--out", str(tmp_path / "v.csv"), "--delay", "1.5"]) == 0
+    assert seen == {"amcr": 1.5, "teater": 1.5}
+
+
+# ── TEATER request pacing ────────────────────────────────────────────────────
+
+
+class TestPacedSession:
+    """_PacedSession keeps min_interval seconds between the end of one request
+    and the start of the next — the TEATER counterpart of AMCR's page delay."""
+
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        state = {"now": 100.0, "sleeps": []}
+
+        def fake_sleep(seconds):
+            state["sleeps"].append(seconds)
+            state["now"] += seconds
+
+        monkeypatch.setattr(load_vocab.time, "monotonic", lambda: state["now"])
+        monkeypatch.setattr(load_vocab.time, "sleep", fake_sleep)
+        return state
+
+    def test_first_request_is_not_delayed(self, clock, monkeypatch):
+        monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: "resp")
+        assert load_vocab._PacedSession(0.5).post("https://example.org") == "resp"
+        assert clock["sleeps"] == []
+
+    def test_next_request_waits_out_the_remaining_interval(self, clock, monkeypatch):
+        monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: "resp")
+        session = load_vocab._PacedSession(0.5)
+        session.post("https://example.org")
+        clock["now"] += 0.2  # 0.2 s elapse between the two calls
+        session.get("https://example.org")
+        assert clock["sleeps"] == [pytest.approx(0.3)]
+
+    def test_no_wait_once_the_interval_has_passed(self, clock, monkeypatch):
+        monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: "resp")
+        session = load_vocab._PacedSession(0.5)
+        session.get("https://example.org")
+        clock["now"] += 2.0
+        session.get("https://example.org")
+        assert clock["sleeps"] == []
+
+    def test_interval_counts_from_the_end_of_a_slow_response(self, clock, monkeypatch):
+        def slow_request(self, *a, **k):
+            clock["now"] += 3.0  # the response itself takes 3 s
+            return "resp"
+
+        monkeypatch.setattr(requests.Session, "request", slow_request)
+        session = load_vocab._PacedSession(0.5)
+        session.get("https://example.org")
+        session.get("https://example.org")
+        assert clock["sleeps"] == [pytest.approx(0.5)]
+
+    def test_a_failed_request_still_paces_the_next(self, clock, monkeypatch):
+        calls = []
+
+        def flaky(self, *a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise requests.ConnectionError("reset")
+            return "resp"
+
+        monkeypatch.setattr(requests.Session, "request", flaky)
+        session = load_vocab._PacedSession(0.5)
+        with pytest.raises(requests.ConnectionError):
+            session.get("https://example.org")
+        session.get("https://example.org")
+        assert clock["sleeps"] == [pytest.approx(0.5)]
+
+    def test_zero_interval_never_sleeps(self, clock, monkeypatch):
+        monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: "resp")
+        session = load_vocab._PacedSession(0)
+        for _ in range(3):
+            session.get("https://example.org")
+        assert clock["sleeps"] == []
+
+    def test_teater_harvest_uses_a_paced_session_with_the_given_delay(self, monkeypatch):
+        sessions = []
+
+        def fake_gql(session, query, variables=None):
+            sessions.append(session)
+            raise RuntimeError("stop after introspection")
+
+        monkeypatch.setattr(load_vocab, "_gql", fake_gql)
+        assert load_vocab.harvest_teater_records(delay=0.7) == {}
+        assert isinstance(sessions[0], load_vocab._PacedSession)
+        assert sessions[0].min_interval == 0.7
+
+
+# ── TEATER Strategy A: the exportAll JSON export ─────────────────────────────
+#
+# tests/fixtures/teater_export_sample.json is a trimmed copy of the live
+# https://teater.aiscr.cz/api/export response (2026-09-23): the real key layout,
+# a nested chain, a Czech label shared by two concepts (geoarcheologie, ids 26
+# and 317), and the live export's one node without an id (url ".../id/").
+
+_EXPORT_FIXTURE = Path(__file__).parent / "fixtures" / "teater_export_sample.json"
+
+
+def _export_sample() -> dict:
+    return json.loads(_EXPORT_FIXTURE.read_text(encoding="utf-8"))
+
+
+class TestParseExportRecords:
+    def test_every_node_with_cs_and_en_names_yields_a_pair(self):
+        vocab = load_vocab._parse_export_records(_export_sample())
+        assert len(vocab) == 15
+        assert vocab["archeolog"] == load_vocab.VocabEntry(
+            "archaeologist", "teater", "4", "https://teater.aiscr.cz/id/4"
+        )
+        # a top-level heading is a node like any other
+        assert vocab["1) teorie a přístupy"].target == "1) Theory and approaches"
+
+    def test_uris_use_the_canonical_https_base_not_the_export_url(self):
+        """The export's own url field is http://…; the CSV carries the
+        TEATER_ID_BASE form that atrium_vocab resolves."""
+        vocab = load_vocab._parse_export_records(_export_sample())
+        uris = [e.uri for e in vocab.values() if e.uri]
+        assert uris and all(u.startswith(load_vocab.TEATER_ID_BASE) for u in uris)
+
+    def test_label_shared_by_two_concepts_keeps_the_last_in_document_order(self):
+        """Same collision rule as the AMCR loop and the search fallback."""
+        vocab = load_vocab._parse_export_records(_export_sample())
+        assert vocab["geoarcheologie"].source_id == "317"  # not 26
+
+    def test_node_without_id_keeps_the_pair_but_claims_no_identity(self):
+        """Its url is the bare '.../id/': the id must be empty, not 'id'."""
+        vocab = load_vocab._parse_export_records(_export_sample())
+        assert vocab["klimatická změna"] == load_vocab.VocabEntry("climate change", "teater", "", "")
+
+    def test_children_of_an_id_less_node_are_still_harvested(self):
+        vocab = load_vocab._parse_export_records(_export_sample())
+        assert vocab["ekologická krize"].source_id == "4125"
+
+    def test_descriptions_are_not_read(self):
+        """Synonym lists under `descriptions` are not term pairs."""
+        vocab = load_vocab._parse_export_records(_export_sample())
+        assert all(e.target != "archaeologists" for e in vocab.values())
+
+    def test_id_falls_back_to_the_url_segment(self):
+        payload = {"categories": [{"name": {"cs": "hrad", "en": "castle"}, "url": "http://teater.aiscr.cz/id/1429"}]}
+        vocab = load_vocab._parse_export_records(payload)
+        assert vocab["hrad"] == load_vocab.VocabEntry("castle", "teater", "1429", "https://teater.aiscr.cz/id/1429")
+
+    def test_incomplete_and_malformed_nodes_are_skipped(self):
+        payload = {
+            "categories": [
+                {"id": "1", "name": {"cs": "hrad", "en": ""}},
+                {"id": "2", "name": "not a dict"},
+                "not a node",
+                {"id": "3", "name": {"cs": "kost", "en": "bone"}, "children": None},
+            ]
+        }
+        assert load_vocab._targets_only(load_vocab._parse_export_records(payload)) == {"kost": "bone"}
+
+    @pytest.mark.parametrize("payload", [{}, {"categories": None}, [], None, {"categories": "x"}])
+    def test_unexpected_payload_shapes_yield_nothing(self, payload):
+        assert load_vocab._parse_export_records(payload) == {}
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class TestStrategyAEndToEnd:
+    """Introspection → exportAll → export download → parsed records."""
+
+    def _gql_with_export(self, url):
+        def fake_gql(session, query, variables=None):
+            if "__schema" in query:
+                return _SCHEMA_WITH
+            return {"exportAll": url}
+
+        return fake_gql
+
+    def test_harvests_the_export_with_concept_ids(self, monkeypatch):
+        requested = []
+
+        def fake_request(self, method, url, *a, **k):
+            requested.append((method, url))
+            return _FakeResponse(_export_sample())
+
+        monkeypatch.setattr(load_vocab, "_gql", self._gql_with_export("http://localhost:8080/api/export"))
+        monkeypatch.setattr(requests.Session, "request", fake_request)
+
+        records = load_vocab.harvest_teater_records(delay=0)
+
+        assert requested == [("GET", "https://teater.aiscr.cz/api/export")]
+        assert records["archeolog"].source_id == "4"
+        assert load_vocab.harvest_teater(delay=0)["archeolog"] == "archaeologist"
+
+    def test_export_failure_is_reported_and_falls_back_to_search(self, monkeypatch, capsys):
+        def broken_request(self, method, url, *a, **k):
+            raise requests.ConnectionError("export down")
+
+        monkeypatch.setattr(load_vocab, "_gql", self._gql_with_export("http://localhost:8080/api/export"))
+        monkeypatch.setattr(requests.Session, "request", broken_request)
+        monkeypatch.setattr(
+            load_vocab, "_harvest_via_search_records", lambda *a, **k: {"kost": load_vocab.VocabEntry("bone")}
+        )
+
+        assert load_vocab._targets_only(load_vocab.harvest_teater_records(delay=0)) == {"kost": "bone"}
+        assert "Strategy A failed: export down" in capsys.readouterr().out

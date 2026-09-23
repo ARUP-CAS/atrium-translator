@@ -30,6 +30,20 @@ plural source token (which breaks English number agreement, e.g. "several
 feature").  The original 2-tuple API is preserved so existing callers and tests
 are unaffected.
 
+Language coverage
+-----------------
+Only the languages in :attr:`LindatLemmatizer.MODELS` are lemmatised.  For any
+other source language ``get_lemmas`` / ``get_lemmas_with_features`` return an
+empty list (and warn once per language) instead of running the text through the
+Czech model: Czech lemmas of, say, Hungarian tokens are noise that can still
+collide with a Czech vocabulary key and freeze a wrong translation into the
+output.  With no lemmas the translator's single-word pass is a no-op, and the
+multi-word phrase pass (surface-form matching) still runs.
+
+Only UDPipe's tokenizer and tagger are requested: they produce LEMMA and FEATS,
+the two columns read here.  The dependency parser (HEAD/DEPREL) is never asked
+for, because nothing reads its output.
+
 Endpoint (atrium-project#63)
 ----------------------------
 The UDPipe endpoint is an attachable backing service: pass ``url=`` explicitly,
@@ -78,7 +92,6 @@ class LindatLemmatizer:
         "ru": "russian-syntagrus-ud-2.15-241121",
         "uk": "ukrainian-iu-ud-2.15-241121",
     }
-    DEFAULT_MODEL = "czech-pdt-ud-2.15-241121"
 
     def __init__(self, url: str | None = None) -> None:
         """*url* overrides ``UDPIPE_URL``, which overrides :attr:`URL`.
@@ -88,6 +101,25 @@ class LindatLemmatizer:
         construction staying hermetic.
         """
         self.url = resolve_udpipe_url(url)
+        # Languages already warned about, so a long document in an unsupported
+        # language logs one line rather than one per block.
+        self._warned_langs: set[str] = set()
+
+    def supports(self, lang: str) -> bool:
+        """True when a UDPipe model is configured for *lang*."""
+        return lang in self.MODELS
+
+    def _model_for(self, lang: str) -> str | None:
+        """The UDPipe model for *lang*, or ``None`` (warning once) when unsupported."""
+        model = self.MODELS.get(lang)
+        if model is None and lang not in self._warned_langs:
+            self._warned_langs.add(lang)
+            supported = ", ".join(sorted(self.MODELS))
+            print(
+                f"[WARN] No UDPipe model configured for language {lang!r} (supported: {supported}); "
+                "single-word vocabulary matching is skipped for it."
+            )
+        return model
 
     def _chunk_text(self, text: str, chunk_size: int = 4000) -> list[str]:
         """
@@ -101,7 +133,10 @@ class LindatLemmatizer:
         return chunk_text(text, chunk_size)
 
     def get_lemmas(self, text: str, lang: str = "cs") -> list[tuple[str, str]]:
-        model = self.MODELS.get(lang, self.DEFAULT_MODEL)
+        """``(word, lemma)`` pairs for *text*; ``[]`` when *lang* has no model."""
+        model = self._model_for(lang)
+        if model is None:
+            return []
         all_lemmas: list[tuple[str, str]] = []
 
         for conllu in self._request_conllu_chunks(text, model):
@@ -117,9 +152,11 @@ class LindatLemmatizer:
 
         Used by the translator to decide whether protecting a token with a
         singular vocabulary translation is safe (singular source) or would break
-        agreement (plural source).
+        agreement (plural source).  ``[]`` when *lang* has no model.
         """
-        model = self.MODELS.get(lang, self.DEFAULT_MODEL)
+        model = self._model_for(lang)
+        if model is None:
+            return []
         all_items: list[tuple[str, str, str]] = []
 
         for conllu in self._request_conllu_chunks(text, model):
@@ -136,11 +173,13 @@ class LindatLemmatizer:
             try:
                 resp = requests.post(
                     self.url,
+                    # Tokenizer + tagger only: they fill LEMMA and FEATS, the
+                    # only columns parsed below. The parser would add HEAD and
+                    # DEPREL, which nothing reads, at extra server-side cost.
                     data={
                         "model": model,
                         "tokenizer": "",
                         "tagger": "",
-                        "parser": "",
                         "data": chunk,
                     },
                     timeout=30,

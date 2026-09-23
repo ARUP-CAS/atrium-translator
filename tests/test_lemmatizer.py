@@ -10,6 +10,10 @@ shared sentence-aware chunker delegation (_chunk_text).
 no ML, no file I/O.
 """
 
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from processors.lemmatizer import LindatLemmatizer
 
 # ── CoNLL-U test documents ────────────────────────────────────────────────────
@@ -113,3 +117,72 @@ class TestLemmatizerChunkText:
         assert chunks[0] == "Short start."
         # and nothing is lost across the split
         assert " ".join(chunks).split() == text.split()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Language coverage and the UDPipe request
+# ════════════════════════════════════════════════════════════════════════════
+
+_ONE_TOKEN = "1\tzámku\tzámek\tNOUN\t_\tCase=Gen|Number=Sing\t_\t_\t_\t_\n"
+
+
+def _ok(conllu: str = _ONE_TOKEN) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"result": conllu}
+    return resp
+
+
+class TestLanguageCoverage:
+    def test_supports_reflects_the_model_table(self):
+        lem = LindatLemmatizer()
+        assert lem.supports("cs") and lem.supports("de")
+        assert not lem.supports("hu")
+        assert not lem.supports("auto")
+
+    @patch("processors.lemmatizer.requests.post")
+    def test_unsupported_language_posts_nothing_and_warns_once(self, mock_post, capsys):
+        """No Czech-model fallback: Czech lemmas of Hungarian tokens are noise."""
+        lem = LindatLemmatizer()
+        assert lem.get_lemmas("Egy régi vár romjai.", lang="hu") == []
+        assert lem.get_lemmas_with_features("Egy régi vár romjai.", lang="hu") == []
+        assert lem.get_lemmas("Még egy mondat.", lang="hu") == []
+
+        mock_post.assert_not_called()
+        warnings = [line for line in capsys.readouterr().out.splitlines() if "[WARN]" in line]
+        assert len(warnings) == 1
+        assert "'hu'" in warnings[0]
+
+    @patch("processors.lemmatizer.requests.post")
+    def test_each_unsupported_language_warns_separately(self, mock_post, capsys):
+        lem = LindatLemmatizer()
+        lem.get_lemmas("x", lang="hu")
+        lem.get_lemmas("x", lang="ro")
+        out = capsys.readouterr().out
+        assert out.count("[WARN]") == 2
+
+    @pytest.mark.parametrize("lang", sorted(LindatLemmatizer.MODELS))
+    @patch("processors.lemmatizer.requests.post")
+    def test_each_supported_language_uses_its_own_model(self, mock_post, lang):
+        mock_post.return_value = _ok()
+        LindatLemmatizer(url="http://udpipe.test").get_lemmas("slovo", lang=lang)
+        assert mock_post.call_args.kwargs["data"]["model"] == LindatLemmatizer.MODELS[lang]
+
+
+class TestUdpipeRequest:
+    @patch("processors.lemmatizer.requests.post")
+    def test_payload_requests_tokenizer_and_tagger_but_not_parser(self, mock_post):
+        """LEMMA and FEATS come from the tagger; HEAD/DEPREL are never read."""
+        mock_post.return_value = _ok()
+        LindatLemmatizer(url="http://udpipe.test").get_lemmas_with_features("k zámku", lang="cs")
+
+        data = mock_post.call_args.kwargs["data"]
+        assert set(data) == {"model", "tokenizer", "tagger", "data"}
+        assert "parser" not in data
+        assert mock_post.call_args.args[0] == "http://udpipe.test"
+
+    @patch("processors.lemmatizer.requests.post")
+    def test_tagger_output_still_yields_lemma_and_number(self, mock_post):
+        mock_post.return_value = _ok()
+        items = LindatLemmatizer(url="http://udpipe.test").get_lemmas_with_features("k zámku", lang="cs")
+        assert items == [("zámku", "zámek", "Sing")]

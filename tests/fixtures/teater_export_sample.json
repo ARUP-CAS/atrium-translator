@@ -1,0 +1,198 @@
+{
+  "categories": [
+    {
+      "id": "1",
+      "name": {
+        "cs": "1) Teorie a přístupy",
+        "en": "1) Theory and approaches",
+        "de": "1) Theorie (e) und Ansätze (e)"
+      },
+      "url": "http://teater.aiscr.cz/id/1",
+      "children": [
+        {
+          "id": "2",
+          "name": {
+            "cs": "archeologie",
+            "en": "archaeology",
+            "de": "Archäologie (e)"
+          },
+          "url": "http://teater.aiscr.cz/id/2",
+          "children": [
+            {
+              "id": "3",
+              "name": {
+                "cs": "dějiny archeologie",
+                "en": "history of archaeology",
+                "de": "Geschichte der Archäologie (e)"
+              },
+              "url": "http://teater.aiscr.cz/id/3",
+              "children": [
+                {
+                  "id": "4",
+                  "name": {
+                    "cs": "archeolog",
+                    "en": "archaeologist",
+                    "de": "Archäologe (r)"
+                  },
+                  "url": "http://teater.aiscr.cz/id/4",
+                  "descriptions": [
+                    {
+                      "title": {
+                        "cz": "České ekvivalenty",
+                        "en": "Czech equivalents",
+                        "de": "Tschechische Äquivalente"
+                      },
+                      "contents": [
+                        {
+                          "text": "archeolog"
+                        }
+                      ]
+                    },
+                    {
+                      "title": {
+                        "cz": "Anglické ekvivalenty",
+                        "en": "English equivalents",
+                        "de": "Englische Äquivalente"
+                      },
+                      "contents": [
+                        {
+                          "text": "archaeologists"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "17",
+              "name": {
+                "cs": "přístupy (archeologie)",
+                "en": "approaches",
+                "de": "Ansätze (e) (Archäologie)"
+              },
+              "url": "http://teater.aiscr.cz/id/17",
+              "children": [
+                {
+                  "id": "18",
+                  "name": {
+                    "cs": "subobory průřezové (tematické) (archeologie)",
+                    "en": "cross-sectional subfields (thematic) (archeology)",
+                    "de": "Querschnittsteilbereiche (e) (thematische) (Archäologie)"
+                  },
+                  "url": "http://teater.aiscr.cz/id/18",
+                  "children": [
+                    {
+                      "id": "26",
+                      "name": {
+                        "cs": "geoarcheologie",
+                        "en": "geoarchaeology",
+                        "de": "Geoarchäologie (e)"
+                      },
+                      "url": "http://teater.aiscr.cz/id/26"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "288",
+      "name": {
+        "cs": "4) Hraniční obory a přidružené obory",
+        "en": "4) Cross-border and related disciplines",
+        "de": "4) Grenzfächer (e) und Nebenfächer (e)"
+      },
+      "url": "http://teater.aiscr.cz/id/288",
+      "children": [
+        {
+          "id": "289",
+          "name": {
+            "cs": "hraniční obory",
+            "en": "cross-bordering disciplines",
+            "de": "Granzfächer (e)"
+          },
+          "url": "http://teater.aiscr.cz/id/289",
+          "children": [
+            {
+              "id": "317",
+              "name": {
+                "cs": "geoarcheologie",
+                "en": "geoarchaeology",
+                "de": "Geoarchäologie (e)"
+              },
+              "url": "http://teater.aiscr.cz/id/317"
+            }
+          ]
+        },
+        {
+          "id": "352",
+          "name": {
+            "cs": "příbuzné obory",
+            "en": "Related disciplines",
+            "de": "Nebenfächer (e)"
+          },
+          "url": "http://teater.aiscr.cz/id/352",
+          "children": [
+            {
+              "id": "850",
+              "name": {
+                "cs": "vědy o Zemi",
+                "en": "Earth sciences",
+                "de": "Geowissenschaft (e)"
+              },
+              "url": "http://teater.aiscr.cz/id/850",
+              "children": [
+                {
+                  "id": "851",
+                  "name": {
+                    "cs": "geografie",
+                    "en": "geography",
+                    "de": "Geographie (e)"
+                  },
+                  "url": "http://teater.aiscr.cz/id/851",
+                  "children": [
+                    {
+                      "id": "869",
+                      "name": {
+                        "cs": "objekt (geografie)",
+                        "en": "object (geography)",
+                        "de": "Objekt (s) (Geografie)"
+                      },
+                      "url": "http://teater.aiscr.cz/id/869",
+                      "children": [
+                        {
+                          "name": {
+                            "cs": "klimatická změna",
+                            "en": "climate change",
+                            "de": "Klimawandel"
+                          },
+                          "url": "http://teater.aiscr.cz/id/",
+                          "children": [
+                            {
+                              "id": "4125",
+                              "name": {
+                                "cs": "ekologická krize",
+                                "en": "ecological crisis",
+                                "de": "eökologische Krise"
+                              },
+                              "url": "http://teater.aiscr.cz/id/4125"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "lastImport": "2023-01-23"
+}

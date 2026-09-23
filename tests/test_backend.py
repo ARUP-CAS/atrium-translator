@@ -4,11 +4,13 @@ tests/test_backend.py – Tests for the pluggable backend interface.
 No network, no models, no GPU required.
 """
 
+import sys
 from unittest.mock import patch
 
 import pytest
 
 from processors.backend import TranslationBackend, get_backend
+from processors.translator import TranslationError
 
 
 @patch("processors.translator.requests.get")
@@ -117,3 +119,43 @@ def test_get_backend_forwards_kwargs(mock_get):
     mock_get.return_value.status_code = 404
     backend = get_backend(vocab_path=None)
     assert type(backend).__name__ == "LindatTranslator"
+
+
+# ── the ct2 registry entry ───────────────────────────────────────────────────
+
+
+def _block_ct2_imports(monkeypatch):
+    """Make `import ctranslate2` / `import sentencepiece` fail, as on the default image."""
+    monkeypatch.setitem(sys.modules, "ctranslate2", None)
+    monkeypatch.setitem(sys.modules, "sentencepiece", None)
+
+
+def test_ct2_is_registered_without_its_heavy_dependencies(monkeypatch):
+    """get_backend("ct2") works on an image without requirements-ct2.txt:
+    construction must not import ctranslate2 or sentencepiece."""
+    _block_ct2_imports(monkeypatch)
+    from processors.ct2_translator import CT2Translator
+
+    backend = get_backend("ct2", vocab_path=None)
+    assert type(backend) is CT2Translator
+    assert backend.name == "ct2"
+    assert isinstance(backend, TranslationBackend)
+
+
+def test_ct2_selected_via_env(monkeypatch):
+    _block_ct2_imports(monkeypatch)
+    monkeypatch.setenv("TRANSLATION_BACKEND", "ct2")
+    assert get_backend().name == "ct2"
+
+
+def test_ct2_without_its_dependencies_fails_at_translate_with_a_hint(monkeypatch):
+    _block_ct2_imports(monkeypatch)
+    backend = get_backend("ct2", model_dir="/models/eurollm")
+    with pytest.raises(TranslationError, match="requirements-ct2.txt"):
+        backend.translate("Ahoj světe dnes", "cs", "en")
+
+
+def test_unknown_backend_error_lists_all_three():
+    with pytest.raises(ValueError) as excinfo:
+        get_backend("nonexistent")
+    assert "Available: ct2, lindat, openai_compatible" in str(excinfo.value)

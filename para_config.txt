@@ -39,3 +39,11 @@ llm_api        = LLM provider ToS ; conditional ; OpenAI-compatible LLM API outp
 ctranslate2    = MIT             ; conditional ; CTranslate2 inference engine
 eurollm        = Apache-2.0      ; conditional ; EuroLLM instruction-tuned MT model
 madlad400      = Apache-2.0      ; conditional ; MADLAD-400 multilingual NMT model
+# One component per CT2_MODEL_FAMILY (ct2_translator._FAMILY_COMPONENTS); a family
+# without one is logged as "UNKNOWN". NLLB-200 is NON-COMMERCIAL: selecting it
+# makes the output CC BY-NC whatever else the run does. Opus-MT is recorded at the
+# conservative end of its split: the tc-big checkpoints are CC BY 4.0, older ones
+# Apache-2.0 (same rank), so CC BY 4.0 adds the attribution duty without
+# overstating restrictions.
+nllb200        = CC BY-NC 4.0    ; conditional ; NLLB-200 multilingual NMT model
+opus_mt        = CC BY 4.0       ; conditional ; Opus-MT (Helsinki-NLP) NMT model

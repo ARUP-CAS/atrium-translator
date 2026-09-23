@@ -60,14 +60,28 @@ is handled by the in-process Tag-and-Protect pipeline below) and
 ``supported_languages()`` so the pipeline can select a backend and check
 language coverage at runtime.  See ``docs/translation-backends.md``.
 
+Multi-word phrase matching
+--------------------------
+Pass 1 protects **every** whole-word occurrence of a phrase, not only the first:
+each occurrence gets its own sentinel, so ``protected_map`` stays one entry per
+occurrence and ``protected_count`` counts occurrences, exactly as pass 2 does.
+"Whole-word" is enforced with ``(?<!\\w)…(?!\\w)`` lookarounds rather than
+``\\b``, because ``\\b`` cannot sit after a phrase that ends in punctuation
+(``sv. jan`` would never match before a space) and would let a phrase fire inside
+a longer word.  One compiled pattern per phrase is cached for the process.
+
 KNOWN LIMITATIONS:
   - Single-word term replacement uses a regex search (re.sub with count=1)
     after extracting lemmas from UDPipe.  If a sentence contains homonyms
     (the same surface word appearing multiple times but with different lemmas),
     the regex blindly replaces the *first* textual occurrence of that surface
     word.  This may result in misaligned tags in rare edge cases.
+  - Multi-word phrases are matched on their surface form as stored in the
+    vocabulary (case-insensitive), not by lemma: an inflected phrase
+    (``fotografií události``) is not protected.
 """
 
+import functools
 import os
 import re
 import time
@@ -132,6 +146,21 @@ _MAX_RETRIES = _env_int("LINDAT_MAX_RETRIES", 4)
 _BACKOFF_BASE_S = _env_float("LINDAT_BACKOFF_BASE_S", 1.0)
 # HTTP status codes worth retrying.
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+@functools.lru_cache(maxsize=None)
+def _phrase_pattern(phrase: str) -> re.Pattern:
+    """Whole-word, case-insensitive pattern for a multi-word vocabulary phrase.
+
+    Lookarounds instead of ``\\b`` so a phrase ending (or starting) in
+    punctuation still matches, while a phrase never fires inside a longer word.
+    Cached: pass 1 runs once per translated block over the whole phrase list,
+    and ``re``'s own 512-entry cache thrashes on a vocabulary of this size.
+    Bounded by the number of distinct phrases, since only phrases that pass the
+    substring pre-filter are ever compiled.
+    """
+    return re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)", re.IGNORECASE)
+
 
 #: LINDAT's public CUBBITT translation API — the default, not a hard requirement.
 DEFAULT_TRANSLATION_URL = "https://lindat.mff.cuni.cz/services/translation/api/v2"
@@ -297,13 +326,23 @@ class LindatTranslator:
         protected_text = text
         protected_map: dict = {}
 
-        # Pass 1: multi-word phrases (longest-first, case-insensitive)
+        # Pass 1: multi-word phrases (longest-first, whole-word, case-insensitive).
+        # Every occurrence gets its own sentinel so protected_map stays one entry
+        # per occurrence, like pass 2; a single shared tag for all occurrences
+        # would undercount protected_count.
+        lowered = text.lower()
         for phrase, translation in self._multiword_terms:
-            pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-            if pattern.search(protected_text):
+            # Cheap pre-filter: the vocabulary keys are lower-cased, and most
+            # phrases never occur in a given block, so skip the regex for them.
+            if phrase not in lowered:
+                continue
+
+            def _protect(_match: re.Match, _translation: str = translation) -> str:
                 tag = self._make_tag(len(protected_map))
-                protected_map[tag] = translation
-                protected_text = pattern.sub(tag, protected_text, count=1)
+                protected_map[tag] = _translation
+                return tag
+
+            protected_text = _phrase_pattern(phrase).sub(_protect, protected_text)
 
         # Pass 2: single-word lemma matching via UDPipe.
         #

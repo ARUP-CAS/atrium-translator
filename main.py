@@ -345,10 +345,12 @@ def parse_arguments():
         "--backend",
         type=str,
         default=None,
-        help="Translation backend to use: 'lindat' (default, LINDAT CUBBITT) or "
+        help="Translation backend to use: 'lindat' (default, LINDAT CUBBITT), "
         "'openai_compatible' (free/low-cost OpenAI-compatible LLM API, configured "
-        "via LLM_* env vars). Default: config 'translation_backend', then env "
-        "TRANSLATION_BACKEND, then 'lindat'. See docs/translation-backends.md.",
+        "via LLM_* env vars) or 'ct2' (self-hosted CTranslate2 model, needs "
+        "requirements-ct2.txt and the CT2_* env vars). Default: config "
+        "'translation_backend', then env TRANSLATION_BACKEND, then 'lindat'. "
+        "See docs/translation-backends.md.",
     )
 
     args = parser.parse_args()

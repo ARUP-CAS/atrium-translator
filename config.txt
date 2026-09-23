@@ -26,6 +26,9 @@ vocabulary = data_samples/vocabulary.csv
 #                         with the LLM_* environment variables (LLM_BASE_URL,
 #                         LLM_MODEL, LLM_API_KEY, optional LLM_PROVIDER /
 #                         LLM_LANGUAGES). See docs/translation-backends.md.
+#   ct2                -> self-hosted CTranslate2 model (EuroLLM / MADLAD-400 /
+#                         NLLB-200 / Opus-MT). Needs requirements-ct2.txt and the
+#                         CT2_* environment variables (CT2_MODEL_DIR at least).
 # Overridden by --backend on the CLI and by the TRANSLATION_BACKEND env var.
 translation_backend = lindat
 

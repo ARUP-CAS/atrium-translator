@@ -334,3 +334,92 @@ class TestNumberAgreementGuard:
         t._basic_translate = MagicMock(side_effect=lambda text, src, tgt: text)
         result = t.translate("Popis nálezu.", "cs", "en")
         assert "find" in result
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Pass 1: multi-word phrases — every occurrence, whole words only
+# ════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def phrase_translator(tmp_path):
+    """A translator with multi-word vocabulary, an identity NMT and no lemmas."""
+
+    def build(rows: str):
+        p = tmp_path / "phrases.csv"
+        p.write_text("source_lemma,target_translation\n" + rows, encoding="utf-8")
+        with patch.object(LindatTranslator, "_fetch_models", return_value=["cs-en"]):
+            t = LindatTranslator(vocab_path=str(p))
+        t._lemmatizer = MagicMock()
+        t._lemmatizer.get_lemmas_with_features.return_value = []
+        t._basic_translate = MagicMock(side_effect=lambda text, src, tgt: text)
+        return t
+
+    return build
+
+
+class TestMultiwordPhrasePass:
+    def test_repeated_phrase_protects_every_occurrence(self, phrase_translator):
+        t = phrase_translator("fotografie události,photograph of event\n")
+        result = t.translate("Fotografie události a druhá fotografie události.", "cs", "en")
+
+        nmt_input = t._basic_translate.call_args.args[0]
+        assert "události" not in nmt_input
+        # one sentinel per occurrence, so protected_map stays 1:1 with occurrences
+        assert LindatTranslator._make_tag(0) in nmt_input
+        assert LindatTranslator._make_tag(1) in nmt_input
+        assert t.protected_count == 2
+        assert result == "photograph of event a druhá photograph of event."
+
+    def test_phrase_inside_a_longer_word_is_not_protected(self, phrase_translator):
+        t = phrase_translator("horní hrad,upper castle\n")
+        source = "Zbytky podhorní hradby."
+        result = t.translate(source, "cs", "en")
+
+        t._basic_translate.assert_called_once_with(source, "cs", "en")
+        assert t.protected_count == 0
+        assert "upper castle" not in result
+
+    def test_phrase_with_inner_punctuation_matches(self, phrase_translator):
+        """'sv. jan' — the '.' is a regex metacharacter and a non-word char."""
+        t = phrase_translator("sv. jan,St John\n")
+        result = t.translate("Kostel sv. Jan stojí.", "cs", "en")
+        assert result == "Kostel St John stojí."
+        assert t.protected_count == 1
+
+    def test_phrase_ending_in_punctuation_matches_before_a_space(self, phrase_translator):
+        r"""A trailing '.' followed by a space has no \b after it; the
+        lookaround boundary still matches there."""
+        t = phrase_translator("př. n. l.,BC\n")
+        result = t.translate("V 5. stol. př. n. l. zde stálo sídliště.", "cs", "en")
+        assert result == "V 5. stol. BC zde stálo sídliště."
+        assert t.protected_count == 1
+
+    def test_longest_phrase_wins_and_is_not_double_tagged(self, phrase_translator):
+        t = phrase_translator("fotografie události,photograph of event\nfotografie události roku,photo of the year\n")
+        result = t.translate("Fotografie události roku.", "cs", "en")
+        assert result == "photo of the year."
+        assert t.protected_count == 1
+
+    def test_protected_count_accumulates_occurrences_across_calls(self, phrase_translator):
+        t = phrase_translator("fotografie události,photograph of event\n")
+        t.translate("fotografie události, fotografie události", "cs", "en")
+        t.translate("fotografie události", "cs", "en")
+        assert t.protected_count == 3
+
+
+def test_unsupported_source_language_still_protects_phrases(tmp_path):
+    """No UDPipe model for 'hu': the lemma pass is skipped (no request), but
+    the surface-form phrase pass still protects its terms."""
+    p = tmp_path / "v.csv"
+    p.write_text("fotografie události,photograph of event\nnález,find\n", encoding="utf-8")
+    with patch.object(LindatTranslator, "_fetch_models", return_value=["cs-en"]):
+        t = LindatTranslator(vocab_path=str(p))
+    t._basic_translate = MagicMock(side_effect=lambda text, src, tgt: text)
+
+    with patch("processors.lemmatizer.requests.post") as mock_post:
+        result = t.translate("fotografie události nález", "hu", "en")
+
+    mock_post.assert_not_called()
+    assert result == "photograph of event nález"
+    assert t.protected_count == 1

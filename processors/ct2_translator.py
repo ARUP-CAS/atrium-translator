@@ -1,6 +1,6 @@
 """
 processors/ct2_translator.py – CTranslate2 self-host translation backend
-(issue #4, Phase 3 — design + scaffold).
+(issue #4, Phase 3).
 
 Goal
 ----
@@ -14,11 +14,14 @@ and a permissive/empty glossary this yields a CC-BY-NC-free output (see the
 
 Status
 ------
-This module is **scaffolded, not yet wired into the default registry**: importing
-``processors/backend.py`` must never pull in the heavy ``ctranslate2`` /
-``sentencepiece`` dependencies. To enable it, install ``requirements-ct2.txt``,
-convert a model to the CTranslate2 format, set the ``CT2_*`` env vars, and
-uncomment the two lines in ``backend._ensure_registry``.
+**Registered** in ``processors/backend._ensure_registry`` as ``ct2``, so
+``--backend ct2`` / ``TRANSLATION_BACKEND=ct2`` select it.  Registration is cheap:
+this module imports only the standard library and sibling modules at import
+time, so importing ``processors/backend.py`` still never pulls in the heavy
+``ctranslate2`` / ``sentencepiece`` dependencies.  To *use* it, install
+``requirements-ct2.txt``, convert a model to the CTranslate2 format and set the
+``CT2_*`` env vars; until then ``translate`` raises a :class:`TranslationError`
+naming what is missing.
 
 The two generation paths differ by model family:
   * ``eurollm`` (decoder-only, instructable)  → ``ctranslate2.Generator`` with a
@@ -37,7 +40,12 @@ Configuration (env, or constructor kwargs)
     CT2_MODEL_FAMILY   "eurollm" (default) | "madlad" | "nllb" | "opus".
     CT2_SP_MODEL       Path to the SentencePiece model (required for NMT families).
     CT2_DEVICE         "cpu" (default) | "cuda".
-    CT2_COMPUTE_TYPE   "int8" (default) | "int8_float16" | "float16" | "float32".
+    CT2_COMPUTE_TYPE   "int8" (default) | "default" | "auto" | any type the device
+                       supports: ``ctranslate2.get_supported_compute_types(device)``
+                       (CPU: int8, int8_float32, int16, float32; CUDA adds e.g.
+                       int8_float16, float16, bfloat16).  Checked when the model
+                       loads; an unsupported value raises TranslationError listing
+                       the valid ones.  CTranslate2 has no 4-bit type.
     CT2_LANGUAGES      Comma-separated ISO codes advertised by supported_languages().
 """
 
@@ -70,20 +78,29 @@ _MIN_RATIO_CHARS = _env_int("CT2_GUARD_MIN_CHARS", 16)
 _MIN_LEN_RATIO = _env_float("CT2_GUARD_MIN_RATIO", 0.25)
 _MAX_LEN_RATIO = _env_float("CT2_GUARD_MAX_RATIO", 4.0)
 
+# Model family -> para_config.txt component carrying that model's licence.
+# Every family must map to a declared component: an undeclared name is logged as
+# "UNKNOWN" by atrium_paradata, which is not a licence anyone can comply with.
+_FAMILY_COMPONENTS = {
+    "eurollm": "eurollm",
+    "madlad": "madlad400",
+    "nllb": "nllb200",
+    "opus": "opus_mt",
+}
 # Families that use the encoder-decoder NMT path (vs. decoder-only LLM path).
 _NMT_FAMILIES = {"madlad", "nllb", "opus"}
+# Accepted by CTranslate2 on every device, in addition to the device's own types.
+_PORTABLE_COMPUTE_TYPES = ("default", "auto")
 _MAX_GLOSSARY_TERMS = 40
 
 
 class CT2Translator:
-    """CTranslate2 self-host backend (EuroLLM / MADLAD-400, Apache-2.0).
+    """CTranslate2 self-host backend (EuroLLM / MADLAD-400 / NLLB-200 / Opus-MT).
 
-    Configuration:
-      CT2_COMPUTE_TYPE   "int4" (default, 4-bit quantization) | "int8" |
-                         "int8_float16" | "float16" | "float32".
-                         int4 is the safe default for limiting VRAM on shared
-                         cluster nodes; promote to int8/float16 when the target
-                         machine has dedicated headroom.
+    Configuration: see the module docstring.  ``CT2_COMPUTE_TYPE`` defaults to
+    ``int8``, CTranslate2's smallest quantisation and the one supported on every
+    CPU and CUDA device; ``int8_float16`` / ``float16`` trade memory for speed
+    on a GPU with headroom.  There is no 4-bit type in CTranslate2.
     """
 
     name: str = "ct2"
@@ -103,7 +120,7 @@ class CT2Translator:
         self.family = (family if family is not None else os.environ.get("CT2_MODEL_FAMILY", "eurollm")).lower().strip()
         self.sp_model = sp_model if sp_model is not None else os.environ.get("CT2_SP_MODEL", "")
         self.device = device if device is not None else os.environ.get("CT2_DEVICE", "cpu")
-        self.compute_type = compute_type if compute_type is not None else os.environ.get("CT2_COMPUTE_TYPE", "int4")
+        self.compute_type = compute_type if compute_type is not None else os.environ.get("CT2_COMPUTE_TYPE", "int8")
 
         # Encoder-decoder NMT families have no glossary mechanism; EuroLLM (LLM)
         # accepts an instruction glossary, so it can own terminology like the LLM
@@ -151,11 +168,20 @@ class CT2Translator:
     def license_components(self, vocab_loaded: bool = False) -> list:
         """Permissive component stack (see para_config.txt).
 
-        The CTranslate2 engine is MIT and the model is Apache-2.0, so a run is
-        permissive *as long as* FastText langid (CC-BY-NC) is avoided via an
-        explicit ``--source_lang`` and the glossary is permissive/empty.
+        The CTranslate2 engine is MIT; the model component follows the family
+        (:data:`_FAMILY_COMPONENTS`).  EuroLLM and MADLAD-400 are Apache-2.0, so
+        such a run is permissive *as long as* FastText langid (CC-BY-NC) is
+        avoided via an explicit ``--source_lang`` and the glossary is
+        permissive/empty.  NLLB-200 is CC BY-NC 4.0, so choosing it makes the
+        output non-commercial whatever else the run does.  Opus-MT is recorded
+        as CC BY 4.0 (the tc-big line; older checkpoints are Apache-2.0, which
+        ranks the same), so it stays permissive but requires attribution.
         """
-        model_comp = {"eurollm": "eurollm", "madlad": "madlad400"}.get(self.family, self.family)
+        # An unknown family never gets this far in a real run (_ensure_loaded
+        # refuses it); passing the raw name through makes paradata report an
+        # unrecognised licence, which para_licenses treats as maximally
+        # restrictive, rather than silently claiming a permissive one.
+        model_comp = _FAMILY_COMPONENTS.get(self.family, self.family)
         comps = ["ctranslate2", model_comp]
         if vocab_loaded:
             # A loaded AMCR/TEATER glossary re-introduces the CC-BY-NC vocab data.
@@ -172,6 +198,10 @@ class CT2Translator:
                 "CT2Translator is not configured: set CT2_MODEL_DIR to a converted "
                 "CTranslate2 model directory (see docs/translation-backends.md)."
             )
+        if self.family not in _FAMILY_COMPONENTS:
+            raise TranslationError(
+                f"Unknown CT2_MODEL_FAMILY {self.family!r}; expected one of: {', '.join(sorted(_FAMILY_COMPONENTS))}."
+            )
         try:
             import ctranslate2  # noqa: PLC0415
         except ImportError as e:
@@ -179,12 +209,38 @@ class CT2Translator:
                 f"ctranslate2 is not installed. Install requirements-ct2.txt to use the 'ct2' backend ({e})."
             )
 
+        self._check_compute_type(ctranslate2)
+        engine_cls = ctranslate2.Translator if self.family in _NMT_FAMILIES else ctranslate2.Generator
+        try:
+            self._engine = engine_cls(self.model_dir, device=self.device, compute_type=self.compute_type)
+        except ValueError as e:
+            # CTranslate2 reports a bad device or compute type as a bare
+            # ValueError; surface it as the backend's own failure type.
+            raise TranslationError(
+                f"CTranslate2 rejected device={self.device!r} compute_type={self.compute_type!r}: {e}"
+            ) from e
         if self.family in _NMT_FAMILIES:
-            self._engine = ctranslate2.Translator(self.model_dir, device=self.device, compute_type=self.compute_type)
             self._sp = self._load_sp()
         else:
-            self._engine = ctranslate2.Generator(self.model_dir, device=self.device, compute_type=self.compute_type)
             self._sp = self._load_sp() if self.sp_model else None
+
+    def _check_compute_type(self, ctranslate2) -> None:
+        """Refuse a compute type *device* cannot run, naming the ones it can.
+
+        CTranslate2 only says ``Invalid compute type: int4`` for an unknown
+        name, and nothing at all about which names are valid on this device.
+        """
+        try:
+            supported = set(ctranslate2.get_supported_compute_types(self.device))
+        except (RuntimeError, ValueError) as e:
+            # e.g. CT2_DEVICE=cuda on a host without a usable CUDA driver.
+            raise TranslationError(f"CT2_DEVICE={self.device!r} is not usable: {e}") from e
+        valid = sorted(supported) + list(_PORTABLE_COMPUTE_TYPES)
+        if self.compute_type not in valid:
+            raise TranslationError(
+                f"CT2_COMPUTE_TYPE={self.compute_type!r} is not supported on device {self.device!r}; "
+                f"valid values: {', '.join(valid)}."
+            )
 
     def _load_sp(self):
         if not self.sp_model:

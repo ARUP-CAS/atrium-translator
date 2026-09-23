@@ -9,6 +9,14 @@ The `atrium-translator` pipeline translates archaeological archival text
 hard-coded backend: the **LINDAT/CUBBITT** bilingual NMT REST API
 (`processors/translator.py → LindatTranslator`).
 
+> **Status (2026-09):** the backend is no longer hard-coded. `processors/backend.py`
+> registers three backends, selected with `--backend` / `TRANSLATION_BACKEND`:
+> `lindat` (the default, `LindatTranslator`), `openai_compatible` (`LLMTranslator`,
+> any OpenAI-compatible chat API) and `ct2` (`CT2Translator`, a self-hosted
+> CTranslate2 model: EuroLLM, MADLAD-400, NLLB-200 or Opus-MT). `ct2` needs
+> `requirements-ct2.txt` and the `CT2_*` variables only when it is actually used;
+> its heavy imports are deferred to the first translation.
+
 The pipeline contract is narrow — callers depend only on:
 
 ```
@@ -46,9 +54,10 @@ Two properties of the current setup motivate exploring alternatives:
 | **Cohere Command A Translate** | Translation LLM (111B)           | API or self-host (1–2× A100/H100) | 23 langs incl. cs, uk, pl, ru, de, fr, es, it, nl, ro, el, hi | **Yes** + document mode | HF weights: **CC-BY-NC**; commercial: Cohere API (paid)       | API: per-token; self-host: GPU infra |
 | **GLM-5.2** (Zhipu/Z.ai)       | General LLM (744B MoE)           | API only (self-host impractical)  | Broad, en/zh-centric                                          | Prompt-only             | Weights: **MIT**; API: ~$1.40/$4.40 per M input/output tokens | ~$1–4 per M tokens                   |
 | **MADLAD-400** (Google)        | Multilingual NMT (T5, 3B/7B/10B) | Self-host (3B CPU-viable)         | 400+ incl. **all** repo langs                                 | No                      | **Apache-2.0**                                                | Infra only                           |
+| **EuroLLM** (UTTER)            | Multilingual LLM (1.7B/9B)       | Self-host (`ct2` backend)         | 35 incl. **all** repo langs                                   | Instructable via prompt | **Apache-2.0**                                                | Infra only                           |
 | **NLLB-200** (Meta)            | Multilingual NMT (0.6–3.3B)      | Self-host                         | 200+ incl. all repo langs                                     | No                      | CC-BY-NC-4.0                                                  | Infra only                           |
 | **Tower+ 9B / 72B** (Unbabel)  | Translation LLM (Qwen2.5-based)  | Self-host GPU                     | 22 langs incl. cs                                             | Instructable via prompt | Research / Qwen license terms                                 | GPU infra                            |
-| **Opus-MT** (Helsinki-NLP)     | Bilingual NMT (Marian)           | Self-host (CPU-viable)            | Many pairs incl. cs-en                                        | No                      | **Apache-2.0**                                                | Minimal infra                        |
+| **Opus-MT** (Helsinki-NLP)     | Bilingual NMT (Marian)           | Self-host (CPU-viable)            | Many pairs incl. cs-en                                        | No                      | Apache-2.0 (older) / **CC BY 4.0** (tc-big)                   | Minimal infra                        |
 | **DeepL API**                  | Commercial NMT/LLM               | API (EU-hosted)                   | European langs incl. cs (top quality)                         | **Yes** (glossary API)  | Proprietary, paid                                             | ~$25/M chars (Pro)                   |
 | **Google Cloud Translation**   | Commercial NMT + LLM             | API                               | Broad                                                         | Yes (glossary)          | Proprietary, paid                                             | ~$20/M chars                         |
 
@@ -57,7 +66,7 @@ Two properties of the current setup motivate exploring alternatives:
 The repo's `LanguageIdentifier` supports: cs, en, fr, de, ru, pl, uk, sk, bg,
 hr, sl, lv, lt, et, hu, ro, es, it, nl, hi.  Of the candidates:
 
-- **Full coverage (all 20):** MADLAD-400, NLLB-200, Google Cloud Translation
+- **Full coverage (all 20):** MADLAD-400, NLLB-200, EuroLLM, Google Cloud Translation
 - **Good coverage (~15/20):** Cohere Command A Translate (missing sk, bg, hr, sl, lv, lt, et, hu)
 - **Partial:** GLM-5.2 (general LLM, not pair-specific), Tower+ (22 langs but subset differs)
 - **Pair-specific:** CUBBITT, Opus-MT (need one model per pair)
@@ -136,6 +145,28 @@ hr, sl, lv, lt, et, hu, ro, es, it, nl, hi.  Of the candidates:
   - [MADLAD-400 paper (NeurIPS 2023)](https://proceedings.neurips.cc/paper_files/paper/2023/file/d49042a5d49818711c401d34172f9900-Paper-Datasets_and_Benchmarks.pdf)
   - [HuggingFace: google/madlad400-3b-mt](https://huggingface.co/google/madlad400-3b-mt)
 
+### EuroLLM (UTTER project)
+
+- **Released:** 2024.  Decoder-only multilingual LLMs (Llama architecture) in
+  1.7B and 9B sizes, with instruction-tuned variants trained for translation.
+- **Languages:** 35, covering every EU official language plus uk, ru, hi and
+  others: **all** 20 languages in the repo's identifier.
+- **License:** **Apache-2.0**, like MADLAD-400, so it keeps the output
+  permissive.  EuroLLM-9B-Instruct is gated on Hugging Face (accept the terms
+  before download).
+- **Deployment:** The `ct2` backend's default family (`CT2_MODEL_FAMILY=eurollm`):
+  converted to CTranslate2 and run as a `Generator` with a translation prompt.
+  1.7B is CPU-viable at int8; 9B wants a GPU.
+- **Terminology:** No glossary API, but instructable: the `ct2` backend injects
+  matching vocabulary pairs into the prompt (`supports_glossary = True`), so
+  Tag-and-Protect and UDPipe are not needed.
+- **Quality:** Not yet measured on this corpus; it is one of the three backends
+  in the planned `eval/bakeoff.py` run (`lindat,openai_compatible,ct2`).
+  Generative, so the output-length guards (`CT2_GUARD_*`) apply.
+- **References:**
+  - [HuggingFace: utter-project/EuroLLM-1.7B-Instruct](https://huggingface.co/utter-project/EuroLLM-1.7B-Instruct)
+  - [HuggingFace: utter-project/EuroLLM-9B-Instruct](https://huggingface.co/utter-project/EuroLLM-9B-Instruct)
+
 ### NLLB-200 (Meta)
 
 - **Released:** 2022.  Multilingual NMT covering 200 languages, 0.6B to 3.3B sizes.
@@ -161,9 +192,14 @@ hr, sl, lv, lt, et, hu, ro, es, it, nl, hi.  Of the candidates:
 ### Opus-MT (Helsinki-NLP)
 
 - **Lightweight, permissive fallback.**  Marian-NMT bilingual models, many
-  pairs including cs-en.  Apache-2.0 licensed.  CPU-viable (~200M params per
-  pair).  Lower quality than the larger models but extremely fast and easy to
-  deploy.  Useful as an offline/edge fallback.
+  pairs including cs-en.  CPU-viable (~200M params per pair).  Lower quality
+  than the larger models but extremely fast and easy to deploy.  Useful as an
+  offline/edge fallback.
+- **License split:** the original checkpoints (e.g. `opus-mt-cs-en`) are
+  Apache-2.0; the newer `opus-mt-tc-big-*` line is **CC BY 4.0**.  Both are
+  permissive and rank the same in `para_licenses.py`, but CC BY adds an
+  attribution duty, so `para_config.txt` records the `opus_mt` component as
+  CC BY 4.0 whichever checkpoint is converted.
 - **References:**
   - [GitHub: Helsinki-NLP/Opus-MT](https://github.com/Helsinki-NLP/Opus-MT)
 
@@ -207,9 +243,14 @@ How each backend changes the effective output license via `para_licenses.py`:
 | Cohere Command A (research weights) | CC BY-NC 4.0       | CC BY-NC 4.0                   | CC BY-NC-SA 4.0             |
 | GLM-5.2                             | MIT                | MIT                            | CC BY-NC-SA 4.0             |
 | MADLAD-400                          | Apache-2.0         | Apache-2.0                     | CC BY-NC-SA 4.0             |
+| EuroLLM                             | Apache-2.0         | Apache-2.0                     | CC BY-NC-SA 4.0             |
 | NLLB-200                            | CC BY-NC 4.0       | CC BY-NC 4.0                   | CC BY-NC-SA 4.0             |
-| Opus-MT                             | Apache-2.0         | Apache-2.0                     | CC BY-NC-SA 4.0             |
+| Opus-MT                             | CC BY 4.0 †        | CC BY 4.0                      | CC BY-NC-SA 4.0             |
 | DeepL API                           | Proprietary (paid) | Per agreement                  | Per agreement + CC BY-NC-SA |
+
+† Recorded conservatively: `opus-mt-tc-big-*` checkpoints are CC BY 4.0, older ones
+Apache-2.0 (same rank). The `ct2` backend logs `nllb200` / `opus_mt` /
+`eurollm` / `madlad400` from `para_config.txt` according to `CT2_MODEL_FAMILY`.
 
 **Key insight:** To achieve a permissive output license, both the translation
 backend *and* the lemmatiser/UDPipe dependency must be replaced (or the
@@ -257,9 +298,10 @@ class TranslationBackend(Protocol):
 ```
 
 A `get_backend(name)` factory returns the appropriate implementation.  The
-default is `"lindat"` (the existing `LindatTranslator`).  New backends are
-registered by adding an adapter class and a registry entry — no changes to
-`main.py`, `utils.py`, or `service/api.py` are needed.
+default is `"lindat"` (the existing `LindatTranslator`); `"openai_compatible"`
+and `"ct2"` are the other two registered names.  New backends are registered by
+adding an adapter class and a registry entry — no changes to `main.py`,
+`utils.py`, or `service/api.py` are needed.
 
 ---
 

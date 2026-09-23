@@ -95,8 +95,8 @@ word boundary — before being sent to the translation API. Keeping whole senten
 improves quality; the word boundary is a fallback and a hard cut is the last resort for oversized single tokens.
 * 🔤 **Tag-and-Protect Vocabulary Overriding**: When a vocabulary CSV is supplied, domain-specific terms are protected
 before translation using NMT-safe placeholder sentinels. Single-word terms are matched by lemma via the **LINDAT UDPipe API** [^6];
-multi-word phrases use case-insensitive substring matching (longest match first). Vocabulary translations are restored
-after the NMT call, ensuring controlled terminology is never garbled.
+multi-word phrases are matched case-insensitively as whole words, longest phrase first, and every occurrence is protected.
+Vocabulary translations are restored after the NMT call, ensuring controlled terminology is never garbled.
 * 🗂️ **Automated Vocabulary Harvesting**: The bundled [load_vocab.py](load_vocab.py)📎 script downloads Czech→English term pairs from
 both the **AMCR OAI-PMH API** [^7] and the **TEATER GraphQL API** [^8] and merges them into a single ready-to-use CSV.
 * 🔗 **LINDAT API Integration**: Seamlessly connects to the LINDAT Translation API (v2) [^1].
@@ -221,7 +221,7 @@ atrium-translator/
 │   ├── backend.py             # 🔌 TranslationBackend protocol + get_backend() registry
 │   ├── translator.py          # 🔄 LINDAT CUBBITT client + Tag-and-Protect vocabulary
 │   ├── llm_translator.py      # 🤖 OpenAI-compatible LLM backend (prompt glossary, guards)
-│   ├── ct2_translator.py      # 🧪 CTranslate2 self-hosted backend (scaffold, unregistered)
+│   ├── ct2_translator.py      # 🧪 CTranslate2 self-hosted backend (`--backend ct2`)
 │   ├── lemmatizer.py          # 🔤 UDPipe-based lemmatizer for vocabulary term matching
 │   ├── identifier.py          # 🌍 FastText language identification (ISO 639-3 → 639-1)
 │   ├── chunking.py            # ✂️ Shared sentence-aware text chunker (priority-ordered)
@@ -339,10 +339,14 @@ vocabulary = data_samples/vocabulary.csv
 #### How it works
 
 1. **Multi-word phrase pass** – phrases containing spaces (e.g. `fotografie události`)
-   are matched case-insensitively, longest match first, and replaced with NMT-safe
-   placeholder sentinels.
+   are matched case-insensitively as whole words (never inside a longer word), longest
+   phrase first. **Every** occurrence is replaced with its own NMT-safe placeholder
+   sentinel and counted in the protected-term statistics. Phrases match on the surface
+   form stored in the CSV, not by lemma.
 2. **Single-word lemma pass** – the remaining text is lemmatised via the LINDAT UDPipe
    API [^6].  Tokens whose base form appears in the vocabulary are similarly tagged.
+   Only source languages with a UDPipe model (table below) are lemmatised; for any
+   other language this pass is skipped, with one warning per language.
    A **number-agreement guard** protects only singular / number-neutral occurrences;
    plural source tokens are left for the NMT to inflect, preventing broken English
    agreement (e.g. "several feature").
@@ -361,7 +365,7 @@ calls are made, no lemmatization is performed - just the basic translation prese
 
 #### Vocabulary CSV format
 
-The vocabulary file must be a UTF-8 encoded CSV with two columns:
+The vocabulary file must be a UTF-8 encoded CSV whose first two columns are the term pair:
 
 ```
 source_lemma,target_translation
@@ -370,11 +374,23 @@ pohřebiště,burial ground
 fotografie události,photograph of event
 ```
 
+Columns 3–5 are **optional provenance** and are ignored by the translator. The harvested
+[vocabulary.csv](data_samples/vocabulary.csv)📎 carries them so every term can be traced
+to its thesaurus concept:
+
+```
+source_lemma,target_translation,source,source_id,uri
+archeolog,archaeologist,teater,4,https://teater.aiscr.cz/id/4
+```
+
 
 | Column               | Content                                                                                                                                                                                                              |
 |----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `source_lemma`       | The **lemmatised (dictionary) form** of the source term. For single-word terms this must match what UDPipe returns for the source language (see table below).  For multi-word phrases, any surface form is accepted. |
 | `target_translation` | The canonical translation — typically the preferred English term from a controlled vocabulary or thesaurus.                                                                                                          |
+| `source` *(opt.)*    | Which thesaurus the pair came from: `amcr` or `teater`.                                                                                                                                                              |
+| `source_id` *(opt.)* | The concept's id in that thesaurus: the AMCR `heslo` id (`HES-…`) or the TEATER concept id.                                                                                                                          |
+| `uri` *(opt.)*       | The dereferenceable concept URI built from `source_id` (`https://api.aiscr.cz/id/…` or `https://teater.aiscr.cz/id/…`).                                                                                              |
 
 
 > [!IMPORTANT]
@@ -400,6 +416,11 @@ for the given language.  A quick way to check is to run any word through the
 | Ukrainian `uk`                    | `ukrainian-iu-ud-2.15`      | Nominative singular; infinitive                     | `церква`, `копати`                              |
 | English `en`                      | `english-ewt-ud-2.15`       | Base form                                           | `church`, `dig`                                 |
 
+Any other `--source_lang` has **no UDPipe model**: the single-word lemma pass is skipped for it
+(one `[WARN]` per language) instead of running the text through the Czech model, whose lemmas
+would be noise that can still collide with a Czech vocabulary key. Multi-word phrases are still
+protected.
+
 > **Tip for non-Czech archives:** If your source XML is in a language other than Czech 🇨🇿,
 > pass the corresponding `--source_lang` code and supply a matching vocabulary CSV whose
 > `source_lemma` column uses that language's lemma conventions. The vocabulary harvesting
@@ -413,10 +434,10 @@ for the given language.  A quick way to check is to run any word through the
 The [load_vocab.py](load_vocab.py)📎 script downloads term pairs automatically from two sources and
 merges them into a single CSV:
 
-| Source           | Endpoint                                 | Method                                                         |
-|------------------|------------------------------------------|----------------------------------------------------------------|
-| **AMCR** [^7]    | `https://api.aiscr.cz/2.2/oai?set=heslo` | OAI-PMH `ListRecords` with resumption token paging             |
-| **TEATER**  [^8] | `https://teater.aiscr.cz/api/graphql`    | GraphQL introspection → `exportAll` or `search`-based fallback |
+| Source           | Endpoint                                                                          | Method                                                                                                     |
+|------------------|-----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| **AMCR** [^7]    | `https://api.aiscr.cz/2.2/oai?verb=ListRecords&metadataPrefix=oai_amcr&set=heslo` | OAI-PMH `ListRecords` with resumption token paging; one pair per `heslo` with a Czech and an English label |
+| **TEATER**  [^8] | `https://teater.aiscr.cz/api/graphql`                                             | GraphQL `exportAll` → JSON export, one pair per concept with `cs` and `en` names; `search`-based fallback  |
 
 ```bash
 # Full harvest (both sources):
@@ -431,7 +452,14 @@ python load_vocab.py --out my_vocab.csv --delay 0.5
 ```
 
 The merged vocabulary is written to [vocabulary.csv](data_samples/vocabulary.csv)📎 by default (AMCR [^7] entries
-take precedence over TEATER [^8] on key collision).
+take precedence over TEATER [^8] on key collision). `--delay` paces both sources: the pause between AMCR pages and the
+minimum gap between TEATER requests.
+
+> [!NOTE]
+> As of 2026-09, `teater.aiscr.cz` serves its TLS certificate without the *RapidSSL TLS RSA CA G1* intermediate, so
+> `requests` cannot verify it and the TEATER harvest logs an SSL error and yields nothing. Do not disable
+> verification: point `REQUESTS_CA_BUNDLE` at a CA bundle that also contains that intermediate. `api.aiscr.cz`
+> serves the same intermediate in its full chain (`openssl s_client -showcerts -connect api.aiscr.cz:443`).
 
 ---
 
@@ -475,7 +503,7 @@ vocabulary = data_samples/vocabulary.csv
 * `--xpaths`: Path to a `.txt` file containing XPaths for XML metadata translation (works with any XML schema).
 * `--xsd`: Optional URL or local path to an XSD file for output validation.
 * `--vocabulary`: Path to a CSV vocabulary file (`source_lemma,target_translation`) to activate Tag-and-Protect term overriding.
-* `--backend`: Translation backend — `lindat` (default, LINDAT CUBBITT) or `openai_compatible` (any OpenAI-compatible LLM API, configured via the `LLM_*` variables). Resolution order: this flag → `translation_backend` in `config.txt` → `TRANSLATION_BACKEND` → `lindat`. See [docs/translation-backends.md](docs/translation-backends.md) 📎.
+* `--backend`: Translation backend — `lindat` (default, LINDAT CUBBITT), `openai_compatible` (any OpenAI-compatible LLM API, configured via the `LLM_*` variables) or `ct2` (a self-hosted CTranslate2 model; install `requirements-ct2.txt` and set the `CT2_*` variables). Resolution order: this flag → `translation_backend` in `config.txt` → `TRANSLATION_BACKEND` → `lindat`. See [docs/translation-backends.md](docs/translation-backends.md) 📎.
 * `--fast-align`: ALTO only. Distribute block tokens by source word count instead of translating each line as an anchor — far fewer API calls, slightly coarser line splits.
 * `--output-mode`: `replace` (default) or `append` — how the translation is written into the document. See [Output mode](#output-mode-replace-vs-append) below. Resolution order: this flag → `output_mode` in `config.txt` → `OUTPUT_MODE` → `replace`.
 
@@ -852,12 +880,20 @@ table is [para_config.txt](para_config.txt) 📎, the resolution lives in
 [para_licenses.py](para_licenses.py) 📎, and the effective result is written into
 every paradata record as `license`, `license_url` and `license_detail`.
 
-> **If you need commercially usable output**, select a permissively licensed
-> backend (`--backend openai_compatible` with a suitable model, or a
-> self-hosted CTranslate2 model) and check the `license_detail` block of the
-> paradata for the run — it records which components were exercised and why the
-> result resolved as it did. See
-> [docs/translation-backends.md](docs/translation-backends.md) 📎 for the
+> **If you need commercially usable output**:
+>
+> * select a permissively licensed backend: `--backend ct2` with
+>   `CT2_MODEL_FAMILY=eurollm`, `madlad` or `opus` (**not** `nllb`, whose weights are
+>   CC BY-NC 4.0), or `--backend openai_compatible` once the provider's actual terms
+>   are recorded for `llm_api` in [para_config.txt](para_config.txt) 📎 — until then
+>   that component is an unrecognised licence, which resolves as non-commercial and
+>   share-alike;
+> * pass an explicit `--source_lang`, so the CC BY-NC FastText model is never loaded;
+> * run without the AMCR/TEATER vocabulary (CC BY-NC);
+> * check the `license_detail` block of the paradata for the run — it records which
+>   components were exercised and why the result resolved as it did.
+>
+> See [docs/translation-backends.md](docs/translation-backends.md) 📎 for the
 > licensing matrix.
 
 To cite this tool, use [CITATION.cff](CITATION.cff) 📎 — GitHub renders it as
@@ -885,5 +921,5 @@ To cite this tool, use [CITATION.cff](CITATION.cff) 📎 — GitHub renders it a
 [^4]: https://atrium-research.eu/
 [^5]: https://huggingface.co/facebook/fasttext-language-identification
 [^6]: https://lindat.mff.cuni.cz/services/udpipe/
-[^7]: https://api.aiscr.cz/2.2/oai?set=heslo
+[^7]: https://api.aiscr.cz/2.2/oai?verb=ListRecords&metadataPrefix=oai_amcr&set=heslo
 [^8]: https://teater.aiscr.cz/

@@ -1,7 +1,35 @@
 """
-download_vocabularies.py
-────────────────────────
-Harvests controlled-vocabulary term pairs (Czech → English) from two sources.
+load_vocab.py
+─────────────
+Harvests controlled-vocabulary term pairs (Czech → English) from two sources and
+writes the merged Tag-and-Protect vocabulary CSV (``python load_vocab.py``).
+
+AMCR
+    OAI-PMH ``ListRecords`` (``metadataPrefix=oai_amcr``, ``set=heslo``) against
+    :data:`AMCR_OAI_BASE`, following ``resumptionToken`` pages.  Every ``heslo``
+    with a ``cs`` label and a ``heslo_en`` label yields one pair.
+
+TEATER
+    GraphQL at :data:`TEATER_GRAPHQL`, after schema introspection:
+
+    A. ``exportAll`` returns the URL of the full thesaurus export (served as
+       ``http://localhost:8080/api/export`` and rewritten to the public host).
+       The export is JSON: a ``categories`` tree whose nodes carry ``id``,
+       ``name`` (``cs`` / ``en`` / ``de``) and ``children``.  Every node with a
+       Czech and an English name yields one pair (:func:`_parse_export_records`).
+       This is the strategy that harvests.
+    B. Fallback when A yields nothing: ``search(value: "")`` once per language
+       (``CS``, ``EN``), joining the two result lists on the concept id.  As of
+       2026-09 the live API answers an empty search value with ``{}``, so B
+       returns nothing; it is kept in case the export endpoint disappears.
+
+    teater.aiscr.cz currently serves its certificate without the RapidSSL
+    intermediate, so a client that does not fetch missing intermediates (such as
+    ``requests``) fails verification there.  Point ``REQUESTS_CA_BUNDLE`` at a
+    bundle that includes it rather than disabling verification.
+
+``--delay`` paces both sources: seconds between AMCR pages, and the minimum gap
+between consecutive TEATER requests (:class:`_PacedSession`).
 
 Every harvested pair keeps the identity of the thesaurus concept it came from:
 the AMCR ``heslo`` id (``HES-…``) or the TEATER concept id, plus the
@@ -201,13 +229,38 @@ def _extract_label(item: dict, lang: str) -> str:
     return ""
 
 
-def _harvest_teater(export_fn, search_fn) -> dict:
+class _PacedSession(requests.Session):
+    """A :class:`requests.Session` keeping *min_interval* seconds between requests.
+
+    The gap is measured from the end of one response to the start of the next
+    request, the same pacing ``harvest_amcr_records`` applies between OAI-PMH
+    pages, so a slow response never lets the next request follow it at once.
+    """
+
+    def __init__(self, min_interval: float = DEFAULT_DELAY) -> None:
+        super().__init__()
+        self.min_interval = max(0.0, float(min_interval))
+        self._last_done: float | None = None
+
+    def request(self, *args, **kwargs):
+        if self._last_done is not None and self.min_interval > 0:
+            wait = self._last_done + self.min_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+        try:
+            return super().request(*args, **kwargs)
+        finally:
+            self._last_done = time.monotonic()
+
+
+def _harvest_teater(export_fn, search_fn, delay: float = DEFAULT_DELAY) -> dict:
     """Strategy selection shared by the two TEATER entry points.
 
     *export_fn* / *search_fn* are looked up on each call, so the record-keeping
     and the legacy two-column variants run exactly the same strategy ladder.
+    Every request goes through one :class:`_PacedSession`, *delay* seconds apart.
     """
-    session = requests.Session()
+    session = _PacedSession(delay)
     session.headers.update({"User-Agent": "ATRIUM-harvester/1.1", "Content-Type": "application/json"})
     print("[TEATER] Connecting to GraphQL API …")
 
@@ -232,13 +285,19 @@ def _harvest_teater(export_fn, search_fn) -> dict:
             data = _gql(session, "{ exportAll }")
             export_url = data.get("exportAll", "")
             if isinstance(export_url, str) and export_url.startswith("http"):
+                # The API advertises its internal address; the export is served
+                # from the public host under the same path.
                 export_url = export_url.replace("http://localhost:8080", "https://teater.aiscr.cz")
+                print(f"  [TEATER] Strategy A: downloading export {export_url}")
                 vocab = export_fn(session, export_url)
                 if vocab:
                     print(f"[TEATER] Strategy A succeeded – {len(vocab)} term pairs.")
                     return vocab
-        except Exception:
-            pass
+                print("  [TEATER] Strategy A: the export yielded no term pairs.")
+            else:
+                print(f"  [TEATER] Strategy A: exportAll returned no URL ({export_url!r}).")
+        except Exception as e:
+            print(f"  [TEATER] Strategy A failed: {e}")
 
     if "search" in query_fields:
         try:
@@ -252,27 +311,87 @@ def _harvest_teater(export_fn, search_fn) -> dict:
     return {}
 
 
-def harvest_teater_records() -> dict[str, VocabEntry]:
+def harvest_teater_records(delay: float = DEFAULT_DELAY) -> dict[str, VocabEntry]:
     return _harvest_teater(
         lambda session, url: _download_and_parse_export_records(session, url),
         lambda session, field, types: _harvest_via_search_records(session, field, types),
+        delay,
     )
 
 
-def harvest_teater() -> dict[str, str]:
+def harvest_teater(delay: float = DEFAULT_DELAY) -> dict[str, str]:
     """Legacy two-column view of :func:`harvest_teater_records`."""
     return _harvest_teater(
         lambda session, url: _download_and_parse_export(session, url),
         lambda session, field, types: _harvest_via_search(session, field, types),
+        delay,
     )
 
 
+def _iter_export_nodes(nodes):
+    """Yield every category node of a TEATER export tree, depth-first in document order."""
+    for node in nodes if isinstance(nodes, list) else []:
+        if not isinstance(node, dict):
+            continue
+        yield node
+        yield from _iter_export_nodes(node.get("children"))
+
+
+def _export_node_identity(node: dict) -> tuple[str, str]:
+    """``(source_id, uri)`` of an export node, built on :data:`TEATER_ID_BASE`.
+
+    The node's ``id`` is authoritative.  Without one, the id is read from the
+    last segment of its ``url`` (``http://teater.aiscr.cz/id/<id>``), and only if
+    that segment is present: the live export contains a node whose ``url`` is
+    the bare ``…/id/``, which must yield no id rather than the literal ``"id"``.
+    """
+    ident = str(node.get("id") or "").strip()
+    if not ident:
+        url = str(node.get("url") or "").strip()
+        if url and not url.endswith("/"):
+            ident = url.rsplit("/", 1)[-1]
+    return _split_identifier(ident, TEATER_ID_BASE)
+
+
+def _parse_export_records(payload: dict) -> dict[str, VocabEntry]:
+    """Flatten TEATER's JSON export into ``{cs_label.lower(): VocabEntry}``.
+
+    Shape, as served by ``/api/export`` (2026-09)::
+
+        {"categories": [{"id": "4",
+                         "name": {"cs": "archeolog", "en": "archaeologist", "de": "…"},
+                         "url": "http://teater.aiscr.cz/id/4",
+                         "descriptions": [...],
+                         "children": [...]}, ...],
+         "lastImport": "2023-01-23"}
+
+    Every node with both a Czech and an English name yields a pair; the tree's
+    top-level headings are nodes like any other.  ``descriptions`` (synonyms,
+    quotes) are not read.  Some Czech labels name more than one concept (the
+    same term filed under two branches, each with its own id): the last one in
+    document order keeps the label, the same rule as the AMCR harvest and the
+    search fallback (plain assignment), so every strategy resolves a collision
+    alike and a re-harvest is stable.
+    """
+    vocab: dict[str, VocabEntry] = {}
+    categories = payload.get("categories") if isinstance(payload, dict) else None
+    for node in _iter_export_nodes(categories):
+        name = node.get("name")
+        if not isinstance(name, dict):
+            continue
+        cs_text = _extract_label(name, "cs")
+        en_text = _extract_label(name, "en")
+        if not (cs_text and en_text):
+            continue
+        source_id, uri = _export_node_identity(node)
+        vocab[cs_text.lower()] = VocabEntry(en_text, "teater", source_id, uri)
+    return vocab
+
+
 def _download_and_parse_export_records(session: requests.Session, url: str) -> dict[str, VocabEntry]:
-    resp = session.get(url, timeout=60)  # verify=False removed
+    resp = session.get(url, timeout=60)
     resp.raise_for_status()
-    # (parsing logic unchanged — STUB: never yielded a term pair, and so cannot
-    # carry concept ids either. Strategy B below is the one that harvests.)
-    return {}
+    return _parse_export_records(resp.json())
 
 
 def _download_and_parse_export(session: requests.Session, url: str) -> dict[str, str]:
@@ -399,7 +518,10 @@ def main(argv: list[str] | None = None) -> int:
         "--delay",
         type=float,
         default=DEFAULT_DELAY,
-        help=f"seconds between AMCR OAI-PMH page requests (default: {DEFAULT_DELAY})",
+        help=(
+            "seconds between consecutive requests to either source: AMCR OAI-PMH pages "
+            f"and TEATER GraphQL/export calls (default: {DEFAULT_DELAY})"
+        ),
     )
     parser.add_argument("--skip-amcr", action="store_true", help="do not harvest AMCR")
     parser.add_argument("--skip-teater", action="store_true", help="do not harvest TEATER")
@@ -409,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--skip-amcr and --skip-teater together leave nothing to harvest")
 
     amcr = None if args.skip_amcr else harvest_amcr_records(delay=args.delay)
-    teater = None if args.skip_teater else harvest_teater_records()
+    teater = None if args.skip_teater else harvest_teater_records(delay=args.delay)
 
     records = merge_records(amcr, teater)
     if not records:
