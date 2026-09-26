@@ -1,6 +1,7 @@
 # 📓 atrium-translator — agent_dev_logs/DEVLOG.md (timeline index)
-> _XML in-place translation. 2 open issues (#4, #46). `test` HEAD `03fc15d` (2026-09-15) · **v1.1.0-beta**,
-> released green after the base-image security fix (see 2026-09-13 below). Twelve-factor detail lives in the hub:
+> _XML in-place translation. 2 open issues (#4, #46). AMČR baseline (atrium-project#67, 2026-09-26): #4 finish ·
+> #46 close after AMČR's production run. `test` HEAD `f876a2f` (2026-09-26) · **v1.2.1-beta** (2026-09-26, the
+> production-readiness fixes). Twelve-factor detail lives in the hub:
 > `ufal/atrium-project/agent_dev_logs/{digests,plans}/53.*` — the `digests/12factor.*` / `plans/12factor.*` this
 > line used to cite were never written._
 > _Per-issue detail: `digests/{4,46}.digest.md` · `plans/{4,46}.plan.md` · `issues/` exports (source of truth). Cross-repo/hub
@@ -282,8 +283,23 @@ cell-merging stub: only page 76 changes, every number on its own row.
   repeated element not allowed). ALTO append validates against ALTO 3.1. Kept both modes and the `replace` default;
   append on AMCR records warns once per run.
 
+## 2026-09-26 (AMČR baseline) — atrium-project#67 and motyc on #46
+
+- **What arrived:** [atrium-project#67](https://github.com/ufal/atrium-project/issues/67) (motyc, AMČR): close #46
+  *"after our production run on 1.2.1-beta"*; finish #4. On #46 (16:32): the run will check **`metadata-en` only** —
+  free-text fields through their XPaths, **`replace`**, `--xsd` AMČR 2.2; vocabulary fields take AMČR's own English
+  labels and are not translated; ALTO is not in the pilot; please run the **`live-backend`** job once; the self-hosted
+  **`ct2`** backend to discuss on 30 September. **Adopted by ÚFAL as binding.**
+- **Dev logs:** `46.*` 🔒 **close-out after AMČR's run** — the corpus, mode, schema, vocabulary and artifact questions
+  marked answered; three steps left (ÚFAL dispatches `live-backend`; AMČR runs; close). The digest's "opener only" is
+  replaced by the seven comments. `4.*` ✅ **finish** — target 2026-10-15 (K4TEL, 09-08); bake-off weighted to AMČR
+  `metadata-en`; `ct2` as a 30 September decision step; versions → v1.2.1-beta.
+- **Carried to the hub:** the translator's hardcoded limits (chunk 4000, language-id 2000 characters, ct2 2048 / 40,
+  LLM timeout 120 s) are in hub #53's limits table; the seed and `CreateAction` asks in hub #67.
+- **Not pushed: files delivered in chat.**
+
 ---
 
-*Timeline index refreshed 2026-09-13 against live `test` HEAD. Entries through 2026-09-07 were verified against the
+*Timeline index refreshed 2026-09-26 (AMČR baseline entry and header); earlier 2026-09-13 against live `test` HEAD. Entries through 2026-09-07 were verified against the
 `CONTRIBUTING.md` changelog table and open-issue state via the GitHub API. Nothing removed from the issue itself
 (per hub #29); this file is a derived reading aid in `agent_dev_logs/`.*
