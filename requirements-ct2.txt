@@ -13,3 +13,7 @@
 # (or TRANSLATION_BACKEND=ct2).
 ctranslate2>=4.8.2
 sentencepiece>=0.2.2
+# EuroLLM uses its Hugging Face tokenizer and chat template for CTranslate2
+# generation. Keep this on the current Transformers 5.x line: the repository's
+# huggingface-hub runtime pin is compatible with Transformers 5.x.
+transformers>=5.15,<6
