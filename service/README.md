@@ -18,12 +18,12 @@ docker compose --profile api up -d
 
 ## Endpoints
 
-| Method | Path         | Purpose                                                                                                                                                                        |
-|--------|--------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GET    | `/info`      | service identity + capabilities: `service`, `version`, `endpoints`, `limits`, `chunk_limit`, backends                                                                          |
-| GET    | `/health`    | liveness probe — 200 always, even mid-shutdown. `?deep=true` additionally checks the translation backend warmed up (503 on failure or while draining)                          |
-| GET    | `/ready`     | readiness probe (issue #55) — 503 until the backend has warmed up, 200 while serving, 503 the instant `SIGTERM` arrives. The Kubernetes `readinessProbe`/`startupProbe` target |
-| POST   | `/translate` | translate one XML document (multipart upload; optional baseline ATRIUM Document JSON)                                                                                          |
+| Method | Path         | Purpose                                                                                                                                                                                |
+|--------|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| GET    | `/info`      | service identity + capabilities: `service`, `version`, `endpoints`, `limits` (every [limit](#limits), current value), `limits_meta` (the variable that sets each), `supported_formats` |
+| GET    | `/health`    | liveness probe — 200 always, even mid-shutdown. `?deep=true` additionally checks the translation backend warmed up (503 on failure or while draining)                                  |
+| GET    | `/ready`     | readiness probe (issue #55) — 503 until the backend has warmed up, 200 while serving, 503 the instant `SIGTERM` arrives. The Kubernetes `readinessProbe`/`startupProbe` target         |
+| POST   | `/translate` | translate one XML document (multipart upload; optional baseline ATRIUM Document JSON)                                                                                                  |
 
 Machine-readable schemas: `GET /openapi.json`, or the Swagger UI at `/docs`, from a
 running server. The repo-root `README.md` covers the CLI and the translation logic itself.
@@ -55,8 +55,16 @@ curl -sf -F "file=@page.alto.xml" \
 the translated document, structurally identical to the input.
 
 When `document_json` is supplied the response is instead `multipart/mixed`: the
-translated XML first, then the updated ATRIUM Document JSON, each with its own
-`Content-Disposition` filename.
+translated XML first, then the updated ATRIUM Document JSON, then `limits_applied.json`
+(see [Limits](#limits)), each with its own `Content-Disposition` filename.
+
+**Limits applied.** When a limit shaped the translation without refusing it — a segment
+split into chunks, a language decided on a sample, a segment left in the source language
+after its retries — the response carries an `X-Atrium-Limits-Applied` header,
+`<key>=<effect>:<count>` pairs joined by `; ` (ASCII only; e.g.
+`lang_id_document_chars=sampled:1; translation_rerun_rounds=skipped:3`). No header means
+no limit applied. The full notes, with a sentence each, are the multipart response's
+`limits_applied.json` part and the run's paradata `limits_applied`.
 
 The response carries no JSON envelope by design — the document is the payload, so
 the endpoint composes with `curl -o` and with the pipeline's other stages.
@@ -66,19 +74,23 @@ the endpoint composes with `curl -o` and with the pipeline's other stages.
 Harmonised across all five ATRIUM services (`agent_skill_strategy.md` §4.4), so a
 client can treat them uniformly:
 
-| Status | Meaning                      | When                                                                                                                                                        |
-|--------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `413`  | Payload too large            | Upload exceeds `MAX_UPLOAD_MB`, or the declared envelope exceeds the cap. Enforced *during* the read, so an oversized body is refused rather than buffered. |
-| `415`  | Unsupported media type       | `Content-Type` is neither `multipart/form-data` nor `application/json`.                                                                                     |
-| `422`  | Unusable input               | Missing filename, or a filename not ending in `.xml`.                                                                                                       |
-| `500`  | Translation failed           | The pipeline raised — malformed XML, or the backend failed after retries.                                                                                   |
-| `503`  | Warming up, or shutting down | Before the backend is warm, or after `SIGTERM`. **Retryable** against another replica.                                                                      |
+| Status | `reason`         | Meaning                | When                                                                                                                                                                                             |
+|--------|------------------|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `413`  | `limit_exceeded` | Payload too large      | A part exceeds `MAX_UPLOAD_MB`, or the declared request exceeds `max_request_mb` (2 × `MAX_UPLOAD_MB` + 1 MB). Enforced *during* the read, so an oversized body is refused rather than buffered. |
+| `415`  | `null`           | Unsupported media type | `Content-Type` is neither `multipart/form-data` nor `application/json`.                                                                                                                          |
+| `422`  | `null`           | Unusable input         | Missing filename, a filename not ending in `.xml`, metadata mode with no XPath targets, or request validation.                                                                                   |
+| `500`  | `null`           | Translation failed     | The pipeline raised — malformed XML, or the backend failed after retries.                                                                                                                        |
+| `503`  | `null`           | Shutting down          | After `SIGTERM`. **Retryable** against another replica.                                                                                                                                          |
 
-Error bodies are FastAPI's `{"detail": ...}`. `detail` is a **string** for the
-errors this service raises itself (the table above), and a **list of validation
-objects** when FastAPI rejects the request before the handler runs — a `POST` with
-`Content-Type: application/json` and no `file` part returns `422` in that second
-shape. A client should not assume `detail` is a string.
+Every error has one JSON body (hub `docs/agent_skill_strategy.md` §4.4, atrium-project#32
+item 2): `{"status": <int>, "reason": <code or null>, "detail": "<text>"}`. `detail` is
+always a string; a `limit_exceeded` body adds `limit` (`key`, `env`, `value`, `observed`,
+`unit`), and a request-validation 422 adds `errors`, FastAPI's list of problems:
+
+```json
+{"status": 413, "reason": "limit_exceeded", "detail": "File too large: over 50 MB (MAX_UPLOAD_MB).",
+ "limit": {"key": "max_upload_mb", "env": "MAX_UPLOAD_MB", "value": 50.0, "observed": null, "unit": "MB"}}
+```
 
 ## How it works
 
@@ -111,8 +123,6 @@ shape. A client should not assume `detail` is a string.
 | `DEFAULT_SOURCE_LANG`       | `cs`              | with `source_lang=auto` (the `/translate` default): the language used when detection cannot be trusted and neither the element's label nor the document's language settles it                                                                             |
 | `LANG_ID_MIN_CONFIDENCE`    | `0.5`             | FastText score a detected language needs before it is used (`auto` only)                                                                                                                                                                                  |
 | `LANG_ID_MIN_LETTERS`       | `20`              | texts with fewer letters are not sent to FastText; they inherit their label / the document language (`auto` only)                                                                                                                                         |
-| `LINDAT_GUARD_RETRIES`      | `2`               | re-requests of an HTTP-200 LINDAT reply that is degenerate (repetition loop, empty, runaway)                                                                                                                                                              |
-| `TRANSLATION_RERUN_ROUNDS`  | `1`               | end-of-document re-run rounds for segments still degenerate after the retries; `0` keeps them as source immediately                                                                                                                                       |
 | `TRANSLATION_RERUN_DELAY_S` | `10.0`            | cool-down before each re-run round — **added to the request's duration** whenever a document has a flagged segment                                                                                                                                        |
 | `AMCR_FIELDS_PATH`          | `amcr-fields.txt` | file of AMCR XPath targets for metadata mode, one per line; relative paths resolve against the repo root. Absent ⇒ metadata requests are refused 422, ALTO unaffected (issue #46)                                                                         |
 | `TRANSLATION_URL`           | LINDAT            | translation API base URL for the `lindat` backend; `LINDAT_BASE_URL` is an alias (issue #63)                                                                                                                                                              |
@@ -148,6 +158,40 @@ and not the listener, and the container reported unhealthy forever.
 > ⚠️ `HOST=127.0.0.1` yields a container that reports **healthy** and serves nobody:
 > `service/healthcheck.py` always probes loopback by design and never reads `HOST`, so a
 > loopback bind passes every probe while being unreachable from outside the container.
+
+## Limits
+
+Every limit this service has (atrium-project#53). Each is an environment setting, declared once
+in [`tool_limits.py`](../tool_limits.py) (the CLI reads the same declaration), reported with its
+current value in `GET /info` `limits` and with the variable that sets it in `limits_meta`. A
+malformed value stops the service at startup, naming the variable. Over a limit the service
+**refuses** (`reason: "limit_exceeded"`) or **translates the input in full** and says how the
+limit shaped the result (`X-Atrium-Limits-Applied`, `limits_applied`). The LLM and CT2 rows
+apply only when `TRANSLATION_BACKEND` selects that backend. `tests/test_limits_contract.py`
+checks this table against `tool_limits.py` and `.env.example`.
+
+| Key (`/info`)              | Variable                                     | Default | Unit    | Over the limit                                                                                     |
+|----------------------------|----------------------------------------------|---------|---------|----------------------------------------------------------------------------------------------------|
+| `max_upload_mb`            | `MAX_UPLOAD_MB`                              | 50      | MB      | 413 `limit_exceeded` — per part: the XML and the baseline document JSON                            |
+| `max_request_mb`           | — (derived from `MAX_UPLOAD_MB`: 2 × it + 1) | —       | MB      | 413 `limit_exceeded`, from the declared `Content-Length`, before the body is read                  |
+| `translation_chunk_chars`  | `TRANSLATION_CHUNK_CHARS`                    | 4000    | chars   | translated in full, in pieces re-joined with a line break — `split` note                           |
+| `lang_id_segment_chars`    | `LANG_ID_SEGMENT_CHARS`                      | 2000    | chars   | `source_lang=auto`: the segment's language is decided on its first N characters — `sampled` note   |
+| `lang_id_document_chars`   | `LANG_ID_DOCUMENT_CHARS`                     | 20000   | chars   | `source_lang=auto`: the document's language is decided on its first N characters — `sampled` note  |
+| `lindat_timeout_s`         | `LINDAT_TIMEOUT_S`                           | 60      | s       | the call is retried (`LINDAT_MAX_RETRIES`)                                                         |
+| `lindat_max_retries`       | `LINDAT_MAX_RETRIES`                         | 4       | retries | the file fails → 500                                                                               |
+| `lindat_guard_retries`     | `LINDAT_GUARD_RETRIES`                       | 2       | retries | the segment is flagged for the end-of-document re-run                                              |
+| `translation_rerun_rounds` | `TRANSLATION_RERUN_ROUNDS`                   | 1       | rounds  | the segment keeps its source text (logged `untranslated`) — `skipped` note with the count          |
+| `llm_timeout_s`            | `LLM_TIMEOUT_S`                              | 120     | s       | the call is retried (`LLM_MAX_RETRIES`)                                                            |
+| `llm_max_tokens`           | `LLM_MAX_TOKENS`                             | 2048    | tokens  | a reply cut at it (`finish_reason=length`) is degenerate: re-run, else kept as source — never used |
+| `llm_max_retries`          | `LLM_MAX_RETRIES`                            | 4       | retries | the file fails → 500                                                                               |
+| `llm_max_glossary_terms`   | `LLM_MAX_GLOSSARY_TERMS`                     | 40      | terms   | CLI `--vocab`: the longest terms are kept — `trimmed` note                                         |
+| `ct2_max_input_tokens`     | `CT2_MAX_INPUT_TOKENS`                       | 1024    | tokens  | the chunk is re-split and translated in full — `split` note                                        |
+| `ct2_max_decoding_tokens`  | `CT2_MAX_DECODING_TOKENS`                    | 2048    | tokens  | a reply that reaches it is degenerate: re-run, else kept as source — never used                    |
+| `ct2_max_glossary_terms`   | `CT2_MAX_GLOSSARY_TERMS`                     | 40      | terms   | CLI `--vocab`: the longest terms are kept — `trimmed` note                                         |
+
+Platform limits (not settings): libxml2's default limits (parsed without `huge_tree`: nesting
+depth, a 10 MB text node) — a document over them fails as malformed XML (500); Starlette's
+multipart defaults.
 
 ## Shutdown behavior (issue #55)
 

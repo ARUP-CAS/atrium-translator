@@ -7,6 +7,7 @@ Brings this repository into API parity with the rest of the ATRIUM pipeline.
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import tempfile
@@ -17,13 +18,15 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 
+from atrium_document import canonical_doc_id
+from atrium_limits import LimitExceeded, LimitNotes
 from atrium_paradata import ParadataLogger
 from main import log_backend_components, process_single_file, record_doc_id
 from processors.backend import get_backend
-from processors.chunking import DEFAULT_CHUNK_SIZE
 from processors.identifier import LanguageIdentifier
 from processors.language import SourceLanguagePolicy, allowed_source_languages
 from processors.translator import resolve_translation_url
+from tool_limits import LIMITS, MAX_UPLOAD, TRANSLATION_CHUNK_CHARS, max_request_mb
 from utils import DEFAULT_OUTPUT_MODE, normalize_output_mode
 
 # Shared ATRIUM meta-contract helpers (§4). Byte-identical across every service,
@@ -32,30 +35,34 @@ try:
     from .atrium_service import (
         ServiceState,
         add_cors,
+        attach_error_handlers,
         attach_health,
         attach_inflight_middleware,
         build_info,
         read_tool_version,
-        resolve_max_upload_mb,
+        read_upload_bounded,
         serve_lifecycle,
     )
 except ImportError:
     from atrium_service import (
         ServiceState,
         add_cors,
+        attach_error_handlers,
         attach_health,
         attach_inflight_middleware,
         build_info,
         read_tool_version,
-        resolve_max_upload_mb,
+        read_upload_bounded,
         serve_lifecycle,
     )
 
 logger = logging.getLogger(__name__)
 
-# Canonical upload limit (§4.5): MAX_UPLOAD_MB, with a deprecated MAX_UPLOAD_BYTES fallback.
-MAX_UPLOAD_MB = resolve_max_upload_mb(50)
-MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB * 1024 * 1024)  # retained: imported by tests/clients
+# Every limit this service has is declared in tool_limits.py (atrium-project#53, factor III)
+# and read per request. These are the import-time values, kept because tests and clients
+# import them.
+MAX_UPLOAD_MB = MAX_UPLOAD.get()
+MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB * 1024 * 1024)
 
 # Read uploads a megabyte at a time so the limit is enforced DURING the read.
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -65,11 +72,18 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # optional baseline document JSON), so a legitimate envelope can be about twice
 # the per-file limit; the extra megabyte covers multipart boundaries and headers.
 # This is a coarse early reject, not the real limit -- _read_bounded() below is.
+# Reported in /info as the derived limit `max_request_mb` (tool_limits.max_request_mb).
 MAX_REQUEST_BYTES = 2 * MAX_UPLOAD_BYTES + _UPLOAD_CHUNK_BYTES
+
+_MIB = 1024 * 1024
+
+#: Response header carrying the limits-applied summary (atrium-project#53);
+#: atrium_service.EXPOSED_HEADERS lets a browser read it.
+LIMITS_HEADER = "X-Atrium-Limits-Applied"
 
 
 def _reject_oversized_envelope(request: Request) -> None:
-    """413 on a declared Content-Length past MAX_REQUEST_BYTES, before reading.
+    """413 ``limit_exceeded`` on a declared Content-Length past the request cap, before reading.
 
     Starlette spools a multipart part to a temporary FILE once it grows past its
     own in-memory threshold, so an unbounded upload fills the container's disk
@@ -78,37 +92,54 @@ def _reject_oversized_envelope(request: Request) -> None:
     per-part accounting in _read_bounded().
     """
     declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Request too large. Max upload size is {MAX_UPLOAD_BYTES} bytes per file.",
+    limit_mb = max_request_mb()
+    if declared.isdigit() and int(declared) > limit_mb * _MIB:
+        raise LimitExceeded(
+            "max_request_mb",
+            limit_mb,
+            round(int(declared) / _MIB, 2),
+            unit="MB",
+            env="MAX_UPLOAD_MB",
+            detail=(
+                f"Request too large: over {limit_mb:g} MB (two parts of MAX_UPLOAD_MB={MAX_UPLOAD.get():g} "
+                "plus 1 MB of multipart overhead)."
+            ),
         )
 
 
 async def _read_bounded(upload: UploadFile, limit_bytes: int, label: str) -> bytes:
-    """Read *upload* fully, raising 413 as soon as it exceeds *limit_bytes*.
+    """Read *upload* fully, refusing it (413 ``limit_exceeded``) once it exceeds *limit_bytes*.
 
     The obvious form -- `content = await upload.read()` and then check
     `len(content)` -- decides whether the upload was too large only after the
     whole of it is resident in memory, so the 413 it raises is unreachable for
     exactly the inputs that need it: an unauthenticated caller could OOM-kill
     the container before the check ran. Reading in bounded chunks and stopping
-    at the limit costs one extra join and makes the limit real.
+    at the limit costs one extra join and makes the limit real. The reader itself
+    moved to the shared atrium_service.read_upload_bounded (atrium-project#53), so
+    every service now reads uploads this way.
     """
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > limit_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"{label} too large. Max size is {limit_bytes} bytes.",
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
+    return await read_upload_bounded(upload, limit_bytes / _MIB, label)
+
+
+#: A client-supplied name used as a file name inside the request's temporary directory:
+#: at most this many UTF-8 bytes, printable, and no path separators.
+_MAX_NAME_BYTES = 200
+
+
+def _safe_file_name(name: str | None) -> str | None:
+    """*name* reduced to a plain file name, or ``None`` when nothing usable is left.
+
+    The upload's and the baseline's names, and the baseline record's ``doc_id``, all
+    become paths under the request's temporary directory. They are the client's, so a
+    name like ``../../x.xml`` must not climb out of it (atrium-project#68 §D).
+    """
+    if not name:
+        return None
+    base = Path(str(name).replace("\\", "/")).name
+    if base in ("", ".", "..") or not base.isprintable() or len(base.encode("utf-8")) > _MAX_NAME_BYTES:
+        return None
+    return base
 
 
 models = {}
@@ -201,6 +232,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 attach_inflight_middleware(app, _state)
+# §4.4 error body {status, reason, detail} for every error (atrium-project#32 item 2, #53).
+attach_error_handlers(app)
 
 # CORS — standard §4.5 configuration (ALLOWED_ORIGINS CSV, default "*").
 add_cors(app)
@@ -296,7 +329,8 @@ async def translate_document(
         source="output_mode",
     )
 
-    if not file.filename or not file.filename.endswith(".xml"):
+    upload_name = _safe_file_name(file.filename)
+    if not upload_name or not upload_name.endswith(".xml"):
         # §4.4: unusable/invalid input is 422 (harmonized from 400).
         raise HTTPException(status_code=422, detail="Only XML files are supported.")
 
@@ -316,17 +350,21 @@ async def translate_document(
         )
 
     _reject_oversized_envelope(request)
-    content = await _read_bounded(file, MAX_UPLOAD_BYTES, "File")
+    upload_mb = MAX_UPLOAD.get()
+    content = await read_upload_bounded(file, upload_mb, "File")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         work_dir = Path(tmpdir)
-        input_path = work_dir / file.filename
+        input_path = work_dir / upload_name
         input_path.write_bytes(content)
 
         doc_json_path = None
         if document_json:
-            doc_json_path = work_dir / (document_json.filename or "baseline.json")
-            doc_json_path.write_bytes(await _read_bounded(document_json, MAX_UPLOAD_BYTES, "Baseline document JSON"))
+            baseline_name = _safe_file_name(document_json.filename) or "baseline.json"
+            if baseline_name == upload_name:
+                baseline_name = "baseline.json"
+            doc_json_path = work_dir / baseline_name
+            doc_json_path.write_bytes(await read_upload_bounded(document_json, upload_mb, "Baseline document JSON"))
 
         # D3/D11 (atrium-project#10): the same derivation process_single_file() uses, so the
         # filename this endpoint promises the client and the doc_id the record is keyed on
@@ -341,7 +379,12 @@ async def translate_document(
         # and for those the uploaded filename is not what the record is keyed on. Deriving
         # from `file.filename` alone would reintroduce exactly the divergence this comment
         # was written about, one level further out.
-        doc_json_out_path = work_dir / f"{record_doc_id(input_path, doc_json_path)}.document.json"
+        #
+        # The id can come from the client's baseline, so it is checked before it becomes a
+        # path; an id that is not a plain file name falls back to the upload's own id. The
+        # record inside keeps the baseline's doc_id either way.
+        record_name = _safe_file_name(f"{record_doc_id(input_path, doc_json_path)}.document.json")
+        doc_json_out_path = work_dir / (record_name or f"{canonical_doc_id(input_path)}.document.json")
 
         output_dir = work_dir / "output"
         output_dir.mkdir()
@@ -383,7 +426,7 @@ async def translate_document(
             "target_lang": target_lang,
             "mode": "alto" if is_alto else "metadata",
             "output_mode": effective_output_mode,
-            "chunk_limit": DEFAULT_CHUNK_SIZE,
+            "chunk_limit": TRANSLATION_CHUNK_CHARS.get(),
             "translation_backend": backend_name,
         }
         # The source-language policy in force (processors/language.py) — the same keys
@@ -442,6 +485,11 @@ async def translate_document(
             if success:
                 log_backend_components(models["translator"], logger, detected=source_lang == "auto")
 
+        # The limits that shaped this translation without refusing it (atrium-project#53):
+        # recorded in the run's paradata by process_single_file, echoed to the caller below
+        # because the paradata itself is not returned yet (#67 R2).
+        limit_notes = LimitNotes(logger.limits_applied)
+
         if not success:
             raise HTTPException(status_code=500, detail="Translation processing failed.")
 
@@ -458,11 +506,19 @@ async def translate_document(
             with open(doc_json_out_path, "rb") as fh:
                 json_bytes = fh.read()
 
+    # The limits echo (atrium-project#53). The response is XML, so the notes travel as an
+    # ASCII header — `key=effect:count; …`, present only when a limit applied (header values
+    # are latin-1, and a note's detail may be Czech) — and, in the multipart form, in full
+    # as a third part, `limits_applied.json`, always present (`[]` when nothing applied).
+    limits_header = limit_notes.header_summary()
+    extra_headers = {LIMITS_HEADER: limits_header} if limits_header else {}
+
     # Deliver multipart/mixed response if document_json is active and generated, allowing
     # clients to retrieve both the updated ATRIUM Document JSON and the resulting ALTO XML.
     if json_bytes:
         boundary = uuid.uuid4().hex
-        headers = {"Content-Type": f"multipart/mixed; boundary={boundary}"}
+        headers = {"Content-Type": f"multipart/mixed; boundary={boundary}", **extra_headers}
+        notes_bytes = json.dumps(limit_notes.as_list(), ensure_ascii=False).encode("utf-8")
 
         def generate_multipart():
             yield f"--{boundary}\r\n".encode()
@@ -473,6 +529,10 @@ async def translate_document(
             yield b"Content-Type: application/json\r\n"
             yield f'Content-Disposition: attachment; filename="{doc_json_out_path.name}"\r\n\r\n'.encode()
             yield json_bytes + b"\r\n"
+            yield f"--{boundary}\r\n".encode()
+            yield b"Content-Type: application/json\r\n"
+            yield b'Content-Disposition: attachment; filename="limits_applied.json"\r\n\r\n'
+            yield notes_bytes + b"\r\n"
             yield f"--{boundary}--\r\n".encode()
 
         return StreamingResponse(generate_multipart(), headers=headers)
@@ -480,7 +540,7 @@ async def translate_document(
     return Response(
         content=xml_bytes,
         media_type="application/xml",
-        headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{out_filename}"', **extra_headers},
     )
 
 
@@ -489,7 +549,7 @@ async def get_info():
     return build_info(
         app,
         service="atrium-translator",
-        limits={"max_upload_mb": MAX_UPLOAD_MB},
+        limits=LIMITS,
         supported_formats=["ALTO XML", "AMCR Metadata XML"],
     )
 

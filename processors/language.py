@@ -35,6 +35,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from tool_limits import LANG_ID_DOCUMENT_CHARS, LANG_ID_SEGMENT_CHARS
+
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -57,8 +59,10 @@ _NOT_LETTER_RE = re.compile(r"[\W\d_]+", re.UNICODE)
 #: Candidates requested from the identifier per text.
 DEFAULT_TOP_K = 5
 
-#: How much of a document is used to resolve its overall language.
-DOCUMENT_SAMPLE_CHARS = 20000
+#: How much of a document is used to resolve its overall language. A setting since
+#: atrium-project#53 (LANG_ID_DOCUMENT_CHARS in tool_limits.py, read per use); this name is
+#: its DEFAULT, kept for the callers that import it (eval/langid_report.py).
+DOCUMENT_SAMPLE_CHARS = LANG_ID_DOCUMENT_CHARS.default
 
 # ISO 639-3 (FastText / NLLB LID labels) → ISO 639-1 (what translation backends and
 # UDPipe are keyed on). Covers the European languages an archival corpus from the
@@ -257,8 +261,15 @@ def _identifier_candidates(identifier, text, max_chars):
     return []
 
 
-def resolve_source_language(identifier, text, policy, *, hint=None, context=None, max_chars=2000) -> Resolution:
-    """The language to translate *text* from — see the module docstring for the order."""
+def resolve_source_language(identifier, text, policy, *, hint=None, context=None, max_chars=None) -> Resolution:
+    """The language to translate *text* from — see the module docstring for the order.
+
+    The identifier reads at most *max_chars* characters of *text*: by default the effective
+    LANG_ID_SEGMENT_CHARS (atrium-project#53). Callers that pass a longer text record the
+    sampling themselves (``utils._SourceLanguages``), where they know which window applied.
+    """
+    if max_chars is None:
+        max_chars = LANG_ID_SEGMENT_CHARS.get()
     raw = None
     if identifier is not None and letter_count(text) >= policy.min_letters:
         candidates = _identifier_candidates(identifier, text, max_chars)

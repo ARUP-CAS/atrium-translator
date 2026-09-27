@@ -693,7 +693,7 @@ curl -sf -F "file=@page.alto.xml" \
 | Method | Path         | Purpose                                                                       |
 |--------|--------------|-------------------------------------------------------------------------------|
 | `POST` | `/translate` | Translate one XML document (multipart upload; returns the rewritten XML)      |
-| `GET`  | `/info`      | Service identity, version, endpoints, limits, available backends              |
+| `GET`  | `/info`      | Service identity, version, endpoints, every limit (`limits`, `limits_meta`)   |
 | `GET`  | `/health`    | Liveness — 200 even mid-shutdown. `?deep=true` also checks the backing models |
 | `GET`  | `/ready`     | Readiness — 503 until warm, and 503 the instant `SIGTERM` arrives             |
 | `GET`  | `/docs`      | Swagger UI; machine-readable schema at `/openapi.json`                        |
@@ -817,7 +817,7 @@ would have written it into the output as `LANG`). Whenever detection could not r
 |---|------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 1 | `detected` | the text has at least `LANG_ID_MIN_LETTERS` (20) letters, and one of FastText's top-5 candidates scores at least `LANG_ID_MIN_CONFIDENCE` (0.5) **and** is a language the backend can translate |
 | 2 | `hint`     | the element's own label — ALTO `LANG`/`language` (ABBYY writes one per block), metadata `xml:lang` — names a language the backend can translate                                                 |
-| 3 | `context`  | the language of the whole document, resolved once, up front, by rule 1 over its first ~20 000 characters                                                                                        |
+| 3 | `context`  | the language of the whole document, resolved once, up front, by rule 1 over its first `LANG_ID_DOCUMENT_CHARS` (default 20 000) characters                                                      |
 | 4 | `default`  | the default source language: `--default-source-lang` → `default_source_lang` (config) → `DEFAULT_SOURCE_LANG` → `cs`                                                                            |
 
 "Can translate" is derived from the backend: for LINDAT, the source side of every model pair that ends in the target

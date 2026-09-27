@@ -29,11 +29,13 @@ except ImportError:
 
 
 from atrium_document import DocumentRecord, canonical_doc_id, load_document, validate_document
+from atrium_limits import LimitExceeded
 from atrium_paradata import ParadataLogger
 from processors.backend import TranslationBackend, get_backend
-from processors.chunking import DEFAULT_CHUNK_SIZE
 from processors.identifier import LanguageIdentifier
 from processors.language import SourceLanguagePolicy, allowed_source_languages
+from processors.limit_notes import collecting
+from tool_limits import TRANSLATION_CHUNK_CHARS
 from utils import (
     DEFAULT_OUTPUT_MODE,
     OUTPUT_MODES,
@@ -67,7 +69,7 @@ def _build_paradata_config(args, config: configparser.ConfigParser) -> dict:
         "xpaths_file": str(args.xpaths or ""),
         "xsd_url": str(args.xsd or ""),
         "vocabulary": str(args.vocabulary or ""),
-        "chunk_limit": DEFAULT_CHUNK_SIZE,
+        "chunk_limit": TRANSLATION_CHUNK_CHARS.get(),
         "lang_id_model": "facebook/fasttext-language-identification",
     }
 
@@ -527,7 +529,12 @@ def process_single_file(
     partial_log_path = csv_log_path.with_name(csv_log_path.name + ".partial")
     xml_written = False
 
-    with open(partial_log_path, "w", encoding="utf-8", newline="") as csv_file:
+    # Every limit that shapes this file's translation without refusing it (a sampled
+    # language window, a split segment, a segment left in the source language) is recorded
+    # here and lands in the paradata's `limits_applied` — and, from the service, in the
+    # response (atrium-project#53). See processors/limit_notes.py for why one collector per
+    # call is sound.
+    with collecting() as limit_notes, open(partial_log_path, "w", encoding="utf-8", newline="") as csv_file:
         csv_writer = csv.writer(csv_file)
         # `status` (last column): ok | rerun | approx_alignment | untranslated — how the
         # line's translation was obtained, so a reviewer can go straight to the lines
@@ -614,9 +621,16 @@ def process_single_file(
                 _logger.log_success("json")
             success = True
 
+        except LimitExceeded:
+            # A limit refusal is the caller's answer (413/422/504 `limit_exceeded`), not a
+            # per-file failure to log and skip (atrium-project#53).
+            _logger.note_limits(limit_notes)
+            raise
         except Exception as e:
             print(f"[ERROR] Failed processing '{file_path.name}': {e}")
             _logger.log_skip(str(file_path), str(e))
+
+        _logger.note_limits(limit_notes)
 
     # The log describes the translated XML, so it is published whenever that XML was
     # (re)written — even if a later step such as the document-record gate failed. If

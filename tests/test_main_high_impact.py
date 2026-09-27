@@ -33,6 +33,7 @@ class FakeParadataLogger:
         self.components: list[str] = []
         self.skipped: list[tuple[str, str]] = []
         self.finalized_with: int | None = None
+        self.limits_applied: list[dict] = []
         Path(paradata_dir).mkdir(parents=True, exist_ok=True)
         type(self).instances.append(self)
 
@@ -65,6 +66,10 @@ class FakeParadataLogger:
         reason: str,
     ) -> None:
         self.skipped.append((filepath, reason))
+
+    def note_limits(self, notes) -> None:
+        """ParadataLogger.note_limits (atrium-project#53): the limits that shaped a file."""
+        self.limits_applied.extend(notes.as_list())
 
     def finalize(
         self,

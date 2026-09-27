@@ -52,7 +52,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .chunking import chunk_text
+from tool_limits import CT2_MAX_DECODING_TOKENS, CT2_MAX_GLOSSARY_TERMS, CT2_MAX_INPUT_TOKENS
+
+from .chunking import chunk_for_translation, chunk_text
+from .limit_notes import note
 from .quality import degeneration_reason
 from .translator import DegenerateTranslationError, TranslationError
 from .vocab import get_matching_terms, load_vocabulary
@@ -92,7 +95,9 @@ _NMT_FAMILIES = {"madlad", "nllb", "opus"}
 
 # Accepted by CTranslate2 on every device, in addition to the device's own types.
 _PORTABLE_COMPUTE_TYPES = ("default", "auto")
-_MAX_GLOSSARY_TERMS = 40
+# A limit since atrium-project#53 (CT2_MAX_GLOSSARY_TERMS in tool_limits.py, read per use);
+# this name is its value at import, kept for the callers and tests that read it.
+_MAX_GLOSSARY_TERMS = CT2_MAX_GLOSSARY_TERMS.get()
 
 
 class CT2Translator:
@@ -147,7 +152,7 @@ class CT2Translator:
         if not text or not text.strip() or src_lang == tgt_lang:
             return text
         self._ensure_loaded()
-        chunks = chunk_text(text)
+        chunks = chunk_for_translation(text)  # records a `split` note (atrium-project#53)
         if self.family in _NMT_FAMILIES:
             out = [self._translate_nmt(c, src_lang, tgt_lang) for c in chunks]
         else:
@@ -285,11 +290,37 @@ class CT2Translator:
             target_prefix = [[self._nllb_code(tgt_lang)]]
         else:  # opus tc-big and similar
             target_prefix = None
-        kwargs = {"beam_size": 4, "max_decoding_length": 2048}
+
+        # CTranslate2 truncates an input longer than `max_input_length` (1024 by default)
+        # WITHOUT saying so, and the translation of the rest is simply missing. Pass the
+        # limit explicitly, and split a chunk that is over it rather than let it be cut
+        # (atrium-project#53).
+        max_input = CT2_MAX_INPUT_TOKENS.get()
+        if len(tokens) > max_input:
+            parts = chunk_text(text, max(len(text) // 2, 1))
+            if len(parts) < 2:
+                raise DegenerateTranslationError(
+                    f"A chunk of {len(tokens)} tokens is over CT2_MAX_INPUT_TOKENS={max_input} and has no "
+                    "boundary to split it at."
+                )
+            note(
+                CT2_MAX_INPUT_TOKENS,
+                "split",
+                1,
+                f"a chunk of {len(tokens)} tokens (over {max_input}) was re-split and translated in full",
+            )
+            return " ".join(self._translate_nmt(part, src_lang, tgt_lang) for part in parts)
+
+        max_decoding = CT2_MAX_DECODING_TOKENS.get()
+        kwargs = {"beam_size": 4, "max_decoding_length": max_decoding, "max_input_length": max_input}
         if target_prefix is not None:
             kwargs["target_prefix"] = target_prefix
         result = self._engine.translate_batch([tokens], **kwargs)
         out_tokens = result[0].hypotheses[0]
+        if len(out_tokens) >= max_decoding:
+            raise DegenerateTranslationError(
+                f"CTranslate2 reply reached CT2_MAX_DECODING_TOKENS={max_decoding}; it is cut, not complete."
+            )
         if target_prefix is not None and out_tokens[: len(target_prefix[0])] == target_prefix[0]:
             out_tokens = out_tokens[len(target_prefix[0]) :]
         translated = self._sp.decode(out_tokens)
@@ -320,15 +351,20 @@ class CT2Translator:
         encoded = self._tokenizer(prompt, add_special_tokens=False)
         tokens = self._tokenizer.convert_ids_to_tokens(encoded["input_ids"])
 
+        max_decoding = CT2_MAX_DECODING_TOKENS.get()
         result = self._engine.generate_batch(
             [tokens],
-            max_length=2048,
+            max_length=max_decoding,
             sampling_temperature=0.0,
             include_prompt_in_result=False,
             end_token=self._tokenizer.eos_token,
         )
 
         out_tokens = result[0].sequences[0]
+        if len(out_tokens) >= max_decoding:
+            raise DegenerateTranslationError(
+                f"CTranslate2 reply reached CT2_MAX_DECODING_TOKENS={max_decoding}; it is cut, not complete."
+            )
         out_ids = self._tokenizer.convert_tokens_to_ids(out_tokens)
         translated = self._tokenizer.decode(
             out_ids,
@@ -396,7 +432,15 @@ class CT2Translator:
         # unrelated words (mirrors the LLM backend fix, L1).
         pairs = get_matching_terms(text, self.vocabulary)
         pairs.sort(key=lambda kv: len(kv[0]), reverse=True)
-        return [f"{s} = {t}" for s, t in pairs[:_MAX_GLOSSARY_TERMS]]
+        cap = CT2_MAX_GLOSSARY_TERMS.get()
+        if len(pairs) > cap:
+            note(
+                CT2_MAX_GLOSSARY_TERMS,
+                "trimmed",
+                1,
+                f"{len(pairs) - cap} matched vocabulary term(s) left out of a prompt; the {cap} longest were kept",
+            )
+        return [f"{s} = {t}" for s, t in pairs[:cap]]
 
     @staticmethod
     def _nllb_code(lang: str) -> str:

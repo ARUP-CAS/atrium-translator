@@ -23,14 +23,16 @@ from lxml import etree
 
 from atrium_document import canonical_doc_id
 from processors.language import (
-    DOCUMENT_SAMPLE_CHARS,
     LanguageTally,
     SourceLanguagePolicy,
     allowed_source_languages,
+    normalise_for_detection,
     resolve_source_language,
 )
+from processors.limit_notes import note
 from processors.quality import degeneration_reason
 from processors.translator import DegenerateTranslationError
+from tool_limits import LANG_ID_DOCUMENT_CHARS, LANG_ID_SEGMENT_CHARS, TRANSLATION_RERUN_ROUNDS
 
 logger = logging.getLogger(__name__)
 
@@ -215,13 +217,6 @@ STATUS_APPROX = "approx_alignment"
 STATUS_UNTRANSLATED = "untranslated"
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, "") or default)
-    except (TypeError, ValueError):
-        return default
-
-
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.environ.get(name, "") or default)
@@ -236,7 +231,7 @@ def _rerun_policy() -> tuple[int, float]:
     changed value and a test can set it. ``TRANSLATION_RERUN_ROUNDS=0`` disables
     the re-run: flagged segments are then kept as source straight away.
     """
-    rounds = max(0, _env_int("TRANSLATION_RERUN_ROUNDS", 1))
+    rounds = TRANSLATION_RERUN_ROUNDS.get()  # a limit (atrium-project#53), read per document
     delay_s = max(0.0, _env_float("TRANSLATION_RERUN_DELAY_S", 10.0))
     return rounds, delay_s
 
@@ -374,13 +369,24 @@ class _SourceLanguages:
                 allowed=allowed_source_languages(translator, tgt_lang)
             )
             self.document = resolve_source_language(
-                identifier, document_text, self.policy, max_chars=DOCUMENT_SAMPLE_CHARS
+                identifier, document_text, self.policy, max_chars=LANG_ID_DOCUMENT_CHARS.get()
             )
 
     def resolve(self, text, hint=None) -> str:
         if not self.auto:
             return self.explicit
-        resolution = resolve_source_language(self.identifier, text, self.policy, hint=hint, context=self.document.lang)
+        window = LANG_ID_SEGMENT_CHARS.get()
+        if len(normalise_for_detection(text)) > window:
+            # The identifier reads the first `window` characters only (atrium-project#53).
+            note(
+                LANG_ID_SEGMENT_CHARS,
+                "sampled",
+                1,
+                f"a segment's source language was decided on its first {window} characters",
+            )
+        resolution = resolve_source_language(
+            self.identifier, text, self.policy, hint=hint, context=self.document.lang, max_chars=window
+        )
         self.tally.add(resolution)
         return resolution.lang
 
@@ -651,7 +657,16 @@ def _metadata_record_text(root, xpaths, xpath_ns) -> str:
             text = getattr(elem, "text", None)
             if isinstance(text, str) and text.strip():
                 texts.append(text.strip())
-    return " ".join(texts)[:DOCUMENT_SAMPLE_CHARS]
+    joined = " ".join(texts)
+    limit = LANG_ID_DOCUMENT_CHARS.get()
+    if len(joined) > limit:
+        note(
+            LANG_ID_DOCUMENT_CHARS,
+            "sampled",
+            1,
+            f"the record's source language was decided on the first {limit} of its {len(joined)} characters",
+        )
+    return joined[:limit]
 
 
 def _write_metadata_translation(elem, translated, src_lang, tgt_lang, output_mode) -> int:
@@ -719,6 +734,15 @@ def _rerun_flagged_metadata(flagged, translator, tgt_lang, output_mode, log_doc_
         recovered,
         untranslated,
     )
+    if untranslated:
+        # HTTP 200 with a field left in the source language used to be visible only in the
+        # *_log.csv, which the service discards (atrium-project#53).
+        note(
+            TRANSLATION_RERUN_ROUNDS,
+            "skipped",
+            untranslated,
+            "field(s) still degenerate after the backend's retries and the re-run kept their source text",
+        )
     return appended
 
 
@@ -1194,18 +1218,34 @@ def _alto_language_label(block):
     return None
 
 
-def _alto_document_text(root, limit=DOCUMENT_SAMPLE_CHARS) -> str:
-    """The document's ``String/@CONTENT`` words in reading order, up to *limit* characters."""
+def _alto_document_text(root, limit=None) -> str:
+    """The document's ``String/@CONTENT`` words in reading order, up to *limit* characters.
+
+    *limit* defaults to the effective LANG_ID_DOCUMENT_CHARS; a document with more text
+    than that is recorded as sampled (``limits_applied``, atrium-project#53).
+    """
+    if limit is None:
+        limit = LANG_ID_DOCUMENT_CHARS.get()
     words, size = [], 0
+    cut = False
     for elem in root.iter():
         if _alto_localname(elem) != "String":
             continue
         content = elem.get("CONTENT")
-        if content:
-            words.append(content)
-            size += len(content) + 1
-            if size >= limit:
-                break
+        if not content:
+            continue
+        if size >= limit:
+            cut = True  # there is more text than the window takes
+            break
+        words.append(content)
+        size += len(content) + 1
+    if cut:
+        note(
+            LANG_ID_DOCUMENT_CHARS,
+            "sampled",
+            1,
+            f"the document's source language was decided on its first {limit} characters",
+        )
     return " ".join(words)
 
 
@@ -1376,6 +1416,21 @@ def _rerun_flagged_alto(pending, translator, tgt_lang, line_anchors, counter, lo
             )
 
 
+def _note_lines_kept_as_source(count: int) -> None:
+    """Record ALTO lines left in the source language (``limits_applied``, atrium-project#53).
+
+    HTTP 200 with lines left untranslated used to be visible only in the *_log.csv, which
+    the service discards. The limit is TRANSLATION_RERUN_ROUNDS: the last chance a flagged
+    segment had.
+    """
+    note(
+        TRANSLATION_RERUN_ROUNDS,
+        "skipped",
+        count,
+        "line(s) still degenerate after the backend's retries and the re-run kept their source text",
+    )
+
+
 def _finalize_alto_block(bdata, output_mode, tgt_lang, line_anchors, counter) -> int:
     """Write one block's translation into its Strings; set each line's CSV text/status.
 
@@ -1388,6 +1443,7 @@ def _finalize_alto_block(bdata, output_mode, tgt_lang, line_anchors, counter) ->
         for ld in lines_data:
             ld["trans_line_text"] = ""
             ld["status"] = STATUS_UNTRANSLATED if ld["orig_text"] else STATUS_OK
+        _note_lines_kept_as_source(sum(1 for ld in lines_data if ld["orig_text"]))
         return 0
 
     source_texts = [ld["orig_text"] for ld in lines_data]
@@ -1433,6 +1489,7 @@ def _finalize_alto_block(bdata, output_mode, tgt_lang, line_anchors, counter) ->
             # ALTERNATIVE — and the CSV says so instead of carrying a silent blank.
             ld["trans_line_text"] = ""
             ld["status"] = STATUS_UNTRANSLATED
+            _note_lines_kept_as_source(1)
             continue
         strings = ld["strings"]
         if strings:

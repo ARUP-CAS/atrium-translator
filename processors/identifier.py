@@ -19,6 +19,8 @@ import logging
 import fasttext
 from huggingface_hub import hf_hub_download
 
+from tool_limits import LANG_ID_SEGMENT_CHARS
+
 from .language import DEFAULT_TOP_K, ISO3_TO_ISO1, normalise_for_detection
 
 # (12-factor XI) Library module: getLogger only, never basicConfig. The root
@@ -77,7 +79,7 @@ class LanguageIdentifier:
                 default,
             )
 
-    def candidates(self, text, k: int = DEFAULT_TOP_K, max_chars: int = 2000) -> list[tuple[str, float]]:
+    def candidates(self, text, k: int = DEFAULT_TOP_K, max_chars: int | None = None) -> list[tuple[str, float]]:
         """FastText's top-*k* guesses for *text* as ``[(iso1_code, score), …]``, best first.
 
         The text is reduced to letters and single spaces first — digits and
@@ -89,6 +91,8 @@ class LanguageIdentifier:
         if not self.model:
             self._warn_unavailable_once("the block's label, the document language or the default")
             return []
+        if max_chars is None:
+            max_chars = LANG_ID_SEGMENT_CHARS.get()  # atrium-project#53
         clean = normalise_for_detection(text)[:max_chars]
         if not clean:
             return []
@@ -116,7 +120,7 @@ class LanguageIdentifier:
             return "en", 0.0
 
         # Lowercase for better detection
-        clean_text = text.replace("\n", " ").lower()[:2000]
+        clean_text = text.replace("\n", " ").lower()[: LANG_ID_SEGMENT_CHARS.get()]
 
         try:
             labels, scores = self.model.predict(clean_text)

@@ -230,6 +230,10 @@ class TestServiceParadata:
             def log_component(self, *a, **kw):
                 pass
 
+            #: ParadataLogger's limits_applied accessor (atrium-project#53); the service
+            #: echoes it to the caller after the run.
+            limits_applied = []
+
         translator = MagicMock()
         translator.name = backend_name
         translator.vocabulary = {}

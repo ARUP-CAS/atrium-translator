@@ -59,8 +59,11 @@ from pathlib import Path
 
 import requests
 
-from .chunking import chunk_text
+from tool_limits import LLM_MAX_GLOSSARY_TERMS, LLM_MAX_RETRIES, LLM_MAX_TOKENS, LLM_TIMEOUT_S
+
+from .chunking import chunk_for_translation
 from .http_retry import Throttle, request_with_retry
+from .limit_notes import note
 from .quality import degeneration_reason
 from .translator import DegenerateTranslationError, TranslationError
 from .vocab import get_matching_terms, load_vocabulary
@@ -84,11 +87,15 @@ def _env_int(name: str, default: int) -> int:
 _MIN_RATIO_CHARS = _env_int("LLM_GUARD_MIN_CHARS", 16)
 _MIN_LEN_RATIO = _env_float("LLM_GUARD_MIN_RATIO", 0.25)
 _MAX_LEN_RATIO = _env_float("LLM_GUARD_MAX_RATIO", 4.0)
+# Limits (atrium-project#53): declared in tool_limits.py, read per use. The two names below
+# are their values at import, kept for the callers and tests that read them.
+#
 # Cap on glossary lines injected into a single prompt (keep the request small).
-_MAX_GLOSSARY_TERMS = _env_int("LLM_MAX_GLOSSARY_TERMS", 40)
+_MAX_GLOSSARY_TERMS = LLM_MAX_GLOSSARY_TERMS.get()
 # Default output-token cap — prevents silent truncation by providers that impose
-# their own hard ceiling without returning an error (M2).
-_LLM_MAX_TOKENS = _env_int("LLM_MAX_TOKENS", 2048)
+# their own hard ceiling without returning an error (M2). A reply the provider cut at
+# the cap is refused, not used (see _translate_chunk).
+_LLM_MAX_TOKENS = LLM_MAX_TOKENS.get()
 
 
 class LLMTranslator:
@@ -121,7 +128,7 @@ class LLMTranslator:
         self.provider = provider if provider is not None else os.environ.get("LLM_PROVIDER", "")
         # Per-instance override; falls back to the module-level default so the
         # env var is respected whether or not it was set before import (M2).
-        self.max_tokens: int = _env_int("LLM_MAX_TOKENS", _LLM_MAX_TOKENS)
+        self.max_tokens: int = LLM_MAX_TOKENS.get()
 
         if languages is not None:
             self._languages = list(languages)
@@ -130,7 +137,7 @@ class LLMTranslator:
             self._languages = [c.strip() for c in env_langs.split(",") if c.strip()]
 
         self._throttle = Throttle(_env_float("LLM_MIN_INTERVAL_S", 0.0))
-        self._max_retries = _env_int("LLM_MAX_RETRIES", 4)
+        self._max_retries = LLM_MAX_RETRIES.get()
         self._backoff_base_s = _env_float("LLM_BACKOFF_BASE_S", 1.0)
 
         # Vocabulary -> prompt glossary (no UDPipe / Tag-and-Protect here).
@@ -148,7 +155,7 @@ class LLMTranslator:
         if not text or not text.strip() or src_lang == tgt_lang:
             return text
         self._require_config()
-        chunks = chunk_text(text)
+        chunks = chunk_for_translation(text)  # records a `split` note (atrium-project#53)
         translated_chunks = [self._translate_chunk(chunk, src_lang, tgt_lang) for chunk in chunks]
         return "\n".join(translated_chunks)
 
@@ -216,7 +223,15 @@ class LLMTranslator:
         # over-matching inside unrelated words (e.g. "kost" ∉ "kostel") — L1.
         pairs = get_matching_terms(text, self.vocabulary)
         pairs.sort(key=lambda kv: len(kv[0]), reverse=True)
-        pairs = pairs[:_MAX_GLOSSARY_TERMS]
+        cap = LLM_MAX_GLOSSARY_TERMS.get()
+        if len(pairs) > cap:
+            note(
+                LLM_MAX_GLOSSARY_TERMS,
+                "trimmed",
+                1,
+                f"{len(pairs) - cap} matched vocabulary term(s) left out of a prompt; the {cap} longest were kept",
+            )
+        pairs = pairs[:cap]
         return [f"{src} = {tgt}" for src, tgt in pairs]
 
     def _build_messages(self, text: str, src_lang: str, tgt_lang: str) -> list:
@@ -242,8 +257,9 @@ class LLMTranslator:
             "max_tokens": self.max_tokens,
         }
         url = f"{self.base_url}/chat/completions"
+        timeout_s = LLM_TIMEOUT_S.get()
         response = request_with_retry(
-            lambda: requests.post(url, json=payload, headers=self._headers(), timeout=120),
+            lambda: requests.post(url, json=payload, headers=self._headers(), timeout=timeout_s),
             max_retries=self._max_retries,
             backoff_base_s=self._backoff_base_s,
             throttle=self._throttle,
@@ -251,8 +267,24 @@ class LLMTranslator:
             label=f"LLM translation ({self.provider or self.model or 'openai_compatible'})",
         )
         translated = self._extract_content(response)
+        if self._finish_reason(response) == "length":
+            # The provider stopped at max_tokens: what came back is the START of a
+            # translation. The length-ratio guard below catches only a severe cut, so a reply
+            # truncated at, say, 60 % used to be accepted as the whole thing (atrium-project#53).
+            raise DegenerateTranslationError(
+                f"LLM reply was cut at LLM_MAX_TOKENS={self.max_tokens} (finish_reason=length); "
+                "raise LLM_MAX_TOKENS or lower TRANSLATION_CHUNK_CHARS."
+            )
         self._guard_output(chunk, translated)
         return translated
+
+    @staticmethod
+    def _finish_reason(response):
+        """``choices[0].finish_reason`` of an OpenAI-compatible reply, or ``None``."""
+        try:
+            return response.json()["choices"][0].get("finish_reason")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            return None
 
     @staticmethod
     def _extract_content(response) -> str:

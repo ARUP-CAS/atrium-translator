@@ -78,6 +78,9 @@ jobs:
           # atrium_document.py resolves next to itself at runtime.
           cp atrium_document.py atrium_document.schema.json dist/
           cp atrium_paradata.py para_licenses.py dist/
+          # atrium_limits.py + tool_limits.py: every limit this tool has, declared once
+          # (atrium-project#53) -- main.py, utils.py, processors/ and the service import them.
+          cp atrium_limits.py tool_limits.py dist/
 
           # The HTTP surface. atrium_service.py and healthcheck.py are canonical
           # files held byte-identical by para-drift; the service does not start

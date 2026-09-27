@@ -17,13 +17,17 @@ and still does, because a 413 comes back either way — the status code is not t
 property that was broken. These tests assert the property that was: that the
 reader STOPS, and that a declared oversize envelope is refused before the body is
 touched at all.
+
+Since atrium-project#53 both refusals raise ``atrium_limits.LimitExceeded`` (HTTP 413,
+``reason: "limit_exceeded"``, mapped by atrium_service.attach_error_handlers) instead of a
+bare HTTPException, and name the setting to change.
 """
 
 import asyncio
 
 import pytest
-from fastapi import HTTPException
 
+from atrium_limits import LimitExceeded
 from service.api import (
     _UPLOAD_CHUNK_BYTES,
     MAX_REQUEST_BYTES,
@@ -68,10 +72,11 @@ def test_read_bounded_stops_instead_of_consuming_everything():
     """The reader must refuse mid-stream, not after buffering the whole upload."""
     upload = _EndlessUpload()
 
-    with pytest.raises(HTTPException) as excinfo:
+    with pytest.raises(LimitExceeded) as excinfo:
         asyncio.run(_read_bounded(upload, MAX_UPLOAD_BYTES, "File"))
 
-    assert excinfo.value.status_code == 413
+    assert excinfo.value.http_status == 413
+    assert excinfo.value.env == "MAX_UPLOAD_MB"
     # It may overshoot by at most the chunk that crossed the limit — never more.
     assert upload.served <= MAX_UPLOAD_BYTES + _UPLOAD_CHUNK_BYTES
 
@@ -87,15 +92,16 @@ def test_read_bounded_accepts_exactly_the_limit():
 
 
 def test_read_bounded_refuses_one_byte_over():
-    with pytest.raises(HTTPException) as excinfo:
+    with pytest.raises(LimitExceeded) as excinfo:
         asyncio.run(_read_bounded(_FiniteUpload(b"y" * 2049), 2048, "File"))
-    assert excinfo.value.status_code == 413
+    assert excinfo.value.http_status == 413
 
 
 def test_oversized_declared_envelope_is_refused():
-    with pytest.raises(HTTPException) as excinfo:
+    with pytest.raises(LimitExceeded) as excinfo:
         _reject_oversized_envelope(_Req(**{"content-length": str(MAX_REQUEST_BYTES + 1)}))
-    assert excinfo.value.status_code == 413
+    assert excinfo.value.http_status == 413
+    assert excinfo.value.key == "max_request_mb"
 
 
 def test_plausible_envelope_is_allowed_through():
