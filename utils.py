@@ -821,7 +821,7 @@ def process_metadata_xml(
                     row[4] = translated
 
             except etree.XPathError as e:
-                print(f"[WARN] XPath error for '{xpath}': {e}")
+                logger.warning("%s: XPath error for '%s': %s", log_doc_id, xpath, e)
 
         if flagged:
             appended += _rerun_flagged_metadata(flagged, translator, tgt_lang, output_mode, log_doc_id)
