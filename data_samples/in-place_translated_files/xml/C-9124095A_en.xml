@@ -34,9 +34,10 @@
       <amcr:datum_ukonceni>1960-12-31</amcr:datum_ukonceni>
       <amcr:hlavni_typ xml:lang="cs" id="HES-001058">skupina/síť sond</amcr:hlavni_typ>
       <amcr:chranene_udaje>
-        <amcr:lokalizace_okolnosti>Spa area in the JV part of the municipality, spring Palliardi, south of building Imperial Spa. Initiative: modification of spring.</amcr:lokalizace_okolnosti>
-        <amcr:souhrn_upresneni>spring was unveiled while editing wooden structure. Subsequent archaeological research has uncovered hazing residues and multiple levels with residues of treated and untreated wood, wooden structures, larger quantities of vegetable macro-residues (pine cones, hazelnuts), several pieces of chipped industry dated to Mesolithic, and fragments of ceramic vessels dated to similar ash fields and the Bronze Age. The research author interpreted the remains of the wooden construction as construction lighter dice from the late Bronze Age.
-Several independent naturalistic analyses have provided information on the form of the surrounding landscape. The research was complicated by high levels of groundwater or mineral springs. Much of the wood elements were degraded by conservation in the laboratory.</amcr:souhrn_upresneni>
+        <amcr:lokalizace_okolnosti>The spa area in the south-western part of the town, the Palliardi spring, south of the Emperor's baths. The reason for the change: the spring.</amcr:lokalizace_okolnosti>
+        <amcr:souhrn_upresneni>Use these exact terms: wooden structure = wooden structure; industry = industry
+
+The source was discovered during the renovation of the source. The subsequent archaeological research uncovered remnants of a wooden structure. Further archaeological research revealed remnants of a hearth and multiple levels with remnants of processed and unprocessed wood, wooden structures, larger amounts of plant macrozabytes (pine cones, hazelnuts), several pieces of chipped industry dated to the Mesolithic and fragments of ceramic vessels dated to the Late Bronze Age. The researcher interpreted the remnants of the wooden structure as a light-weight construction from the Late Bronze Age. Several independent natural science analyses provided information about the appearance of the surrounding landscape. The research was complicated by the high level of groundwater, or the spring of mineral springs. A large part of the wooden elements was degraded during conservation in the laboratory.</amcr:souhrn_upresneni>
       </amcr:chranene_udaje>
     </amcr:akce>
     <amcr:historie>
@@ -72,13 +73,15 @@ Several independent naturalistic analyses have provided information on the form 
           <amcr:druh xml:lang="cs" id="HES-000491">konstrukční prvek</amcr:druh>
           <amcr:specifikace xml:lang="cs" id="HES-000897">konstrukce dřevěná</amcr:specifikace>
           <amcr:pocet>xx</amcr:pocet>
-          <amcr:poznamka>floor, stakes</amcr:poznamka>
+          <amcr:poznamka>Use these exact terms: floor, well
+
+floor, well</amcr:poznamka>
         </amcr:nalez_objekt>
         <amcr:nalez_objekt>
           <amcr:id>nalo-93683</amcr:id>
           <amcr:druh xml:lang="cs" id="HES-000473">pramen</amcr:druh>
           <amcr:specifikace xml:lang="cs" id="HES-000896">konstrukce kamenná</amcr:specifikace>
-          <amcr:poznamka>Apparently stone reinforcement spring.</amcr:poznamka>
+          <amcr:poznamka>The stone reinforcement of the spring.</amcr:poznamka>
         </amcr:nalez_objekt>
         <amcr:nalez_predmet>
           <amcr:id>nalp-165933</amcr:id>
@@ -142,7 +145,9 @@ Several independent naturalistic analyses have provided information on the form 
           <amcr:druh xml:lang="cs" id="HES-000705">zlomek keramiky</amcr:druh>
           <amcr:specifikace xml:lang="cs" id="HES-000981">keramika kamenina</amcr:specifikace>
           <amcr:pocet>x</amcr:pocet>
-          <amcr:poznamka>Waldenburg trade good, fractions from mineral water bottles</amcr:poznamka>
+          <amcr:poznamka>Use these exact terms: trade good
+
+Waldenburské zboží, zlomky z lahví na minerální vodu</amcr:poznamka>
         </amcr:nalez_predmet>
       </amcr:komponenta>
       <amcr:komponenta>
