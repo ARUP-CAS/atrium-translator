@@ -886,12 +886,12 @@ def process_metadata_xml(
             )
 
         if xsd_schema:
-            print(f"[INFO] Validating {output_path.name} against XSD …")
+            logger.info("%s: validating %s against XSD …", log_doc_id, output_path.name)
             is_valid, error_log = validate_xml_with_xsd(tree, xsd_schema)
             if is_valid:
-                print(f"[SUCCESS] XSD validation passed for {output_path.name}")
+                logger.info("%s: XSD validation passed for %s", log_doc_id, output_path.name)
             else:
-                print(f"[WARN] XSD validation failed:\n{error_log}")
+                logger.warning("%s: XSD validation failed for %s:\n%s", log_doc_id, output_path.name, error_log)
 
         # pretty_print is intentionally OFF: it reflows whitespace and can perturb
         # significant whitespace in mixed-content elements (finding #10). Leaving
@@ -902,10 +902,12 @@ def process_metadata_xml(
             xml_declaration=True,
             pretty_print=False,
         )
-        print(f"[SUCCESS] Saved metadata translation → {output_path}")
+        logger.info("%s: saved metadata translation → %s", log_doc_id, output_path)
 
     except Exception as e:
-        print(f"[ERROR] Failed to process metadata XML '{input_path}': {e}")
+        logger.error(
+            "%s: failed to process metadata XML '%s': %s", doc_id or canonical_doc_id(input_path), input_path, e
+        )
         raise
 
 
