@@ -184,6 +184,50 @@ def test_translate_real_pipeline_keeps_the_multi_dot_doc_id():
     }
 
 
+def test_translate_real_pipeline_accretes_onto_a_seed_keyed_unlike_the_upload():
+    """
+    (atrium-project#68) An AMČR seed is keyed by the AMČR file id, not by the upload's name.
+    alto-postprocess and llm-enrich returned the untouched seed in that case; this endpoint
+    names the record after the id it inherits (`record_doc_id`) and writes it to that explicit
+    path, so the returned record carries `translations` and the seed's doc_id. The test keeps
+    it that way.
+    """
+    seed_id = "C-202000543A-DT-27"
+    seed = json.dumps(
+        {
+            "schema_version": "1.0",
+            "record_type": "atrium-document",
+            "doc_id": seed_id,
+            "pages": [{"page": "1", "quality_score": 0.98}],
+        }
+    ).encode()
+
+    fake_translator = MagicMock()
+    fake_translator.name = "lindat"
+    fake_translator.vocabulary = {}
+    fake_translator.protected_count = 0
+    fake_translator.translate.side_effect = lambda text, *a, **k: f"EN:{text}"
+    fake_translator.license_components.return_value = ["lindat_cubbitt"]
+
+    with patch("service.api.models", {"translator": fake_translator, "identifier": MagicMock()}):
+        response = client.post(
+            "/translate?source_lang=cs&target_lang=en",
+            files={
+                "file": ("scan.alto.xml", _ALTO_XML, "application/xml"),
+                "document_json": ("seed.document.json", seed, "application/json"),
+            },
+            data={"is_alto": "true"},
+        )
+
+    assert response.status_code == 200, response.content[:400]
+    assert f'filename="{seed_id}.document.json"'.encode() in response.content
+
+    record = _json_part(response.content)
+    assert record["doc_id"] == seed_id
+    assert record["pages"][0]["quality_score"] == 0.98
+    assert record["translations"]["backend"] == "lindat"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Metadata mode through the API (issue #46)
 #
