@@ -173,6 +173,56 @@ def test_the_llm_timeout_is_a_setting(monkeypatch):
     assert post.call_args.kwargs["timeout"] == 7.5
 
 
+def _lindat():
+    from processors.translator import LindatTranslator
+
+    with patch("processors.translator.requests.get", side_effect=OSError("offline")):
+        return LindatTranslator(vocab_path=None)
+
+
+def _lindat_reply(text):
+    r = MagicMock()
+    r.status_code = 200
+    r.text = text
+    return r
+
+
+def test_the_lindat_timeout_and_retries_are_settings(monkeypatch):
+    monkeypatch.setenv("LINDAT_TIMEOUT_S", "7.5")
+    monkeypatch.setenv("LINDAT_MAX_RETRIES", "0")
+    backend = _lindat()
+    with patch("processors.translator.requests.post", return_value=_lindat_reply("A castle.")) as post:
+        assert backend.translate("Hrad.", "cs", "en") == "A castle."
+    assert post.call_args.kwargs["timeout"] == 7.5
+
+
+def test_a_lindat_segment_split_into_chunks_is_recorded(monkeypatch):
+    monkeypatch.setenv("TRANSLATION_CHUNK_CHARS", "100")
+    backend = _lindat()
+    text = "\n".join(["Věta o hradu a mostu, která je dlouhá."] * 6)
+
+    def reply(url, data, timeout):  # one English line per Czech line, so no guard fires
+        return _lindat_reply(
+            "\n".join(["A sentence about a castle and a bridge, which is long."] * len(data["input_text"].splitlines()))
+        )
+
+    with patch("processors.translator.requests.post", side_effect=reply) as post:
+        with collecting() as notes:
+            backend.translate(text, "cs", "en")
+    assert post.call_count > 1
+    [entry] = notes.as_list()
+    assert (entry["limit"], entry["effect"], entry["value"]) == ("translation_chunk_chars", "split", 100)
+
+
+def test_the_lindat_guard_retries_are_read_per_call(monkeypatch):
+    monkeypatch.setenv("LINDAT_GUARD_RETRIES", "0")
+    backend = _lindat()
+    with patch("processors.translator.requests.post", return_value=_lindat_reply("")) as post:
+        with pytest.raises(DegenerateTranslationError, match="after 1 attempt"):
+            backend.translate("Hrad stojí na kopci nad řekou.", "cs", "en")
+    assert post.call_count == 1
+
+
 def test_an_llm_glossary_over_the_cap_is_recorded(monkeypatch):
     monkeypatch.setenv("LLM_MAX_GLOSSARY_TERMS", "2")
     backend = LLMTranslator(base_url="https://example.test/v1", model="m")

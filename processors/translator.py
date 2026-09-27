@@ -117,7 +117,9 @@ except ImportError:
             yield item
 
 
-from .chunking import chunk_text
+from tool_limits import LINDAT_GUARD_RETRIES, LINDAT_MAX_RETRIES, LINDAT_TIMEOUT_S
+
+from .chunking import chunk_for_translation, chunk_text
 from .http_retry import request_with_retry
 from .lemmatizer import LindatLemmatizer
 from .quality import degeneration_reason
@@ -156,13 +158,6 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, "") or default)
-    except (TypeError, ValueError):
-        return default
-
-
 def _env_str(*names: str, default: str) -> str:
     """First non-empty value among *names* in the environment, else *default*."""
     for name in names:
@@ -174,16 +169,18 @@ def _env_str(*names: str, default: str) -> str:
 
 # Minimum seconds between outbound LINDAT requests (0 = disabled).
 _MIN_INTERVAL_S = _env_float("LINDAT_MIN_INTERVAL_S", 0.0)
-# Retries on transient failure (network error, HTTP 429/5xx).
-_MAX_RETRIES = _env_int("LINDAT_MAX_RETRIES", 4)
+# Retries on transient failure (network error, HTTP 429/5xx). A limit (atrium-project#53):
+# declared in tool_limits.py and read per call; this name is its value at import, kept for
+# the callers and tests that read it.
+_MAX_RETRIES = LINDAT_MAX_RETRIES.get()
 # Base for exponential back-off (seconds): sleep = base * 2**attempt + jitter.
 _BACKOFF_BASE_S = _env_float("LINDAT_BACKOFF_BASE_S", 1.0)
 # HTTP status codes worth retrying.
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 # Re-requests of a reply that came back HTTP 200 but degenerate (see
 # _translate_chunk_guarded). Separate from _MAX_RETRIES: that one is about the
-# transport, this one about the content.
-_GUARD_RETRIES = _env_int("LINDAT_GUARD_RETRIES", 2)
+# transport, this one about the content. A limit, like _MAX_RETRIES above.
+_GUARD_RETRIES = LINDAT_GUARD_RETRIES.get()
 
 
 @functools.lru_cache(maxsize=None)
@@ -547,9 +544,10 @@ class LindatTranslator:
         exhausted, so the caller fails loudly instead of embedding an error
         string in the document.
         """
+        timeout_s = LINDAT_TIMEOUT_S.get()
         response = request_with_retry(
-            lambda: requests.post(url, data=data, timeout=60),
-            max_retries=_MAX_RETRIES,
+            lambda: requests.post(url, data=data, timeout=timeout_s),
+            max_retries=LINDAT_MAX_RETRIES.get(),
             backoff_base_s=_BACKOFF_BASE_S,
             retryable_status=_RETRYABLE_STATUS,
             throttle=self._throttle,
@@ -567,7 +565,9 @@ class LindatTranslator:
         if self.supported_models and model_name not in self.supported_models:
             model_name, src_lang, tgt_lang = "cs-en", "cs", "en"
 
-        chunks = self._chunk_text(text)
+        # chunk_for_translation, not _chunk_text: a segment that is split is recorded
+        # (limits_applied, atrium-project#53).
+        chunks = chunk_for_translation(text)
         translated_chunks = []
         chunk_iter = tqdm(chunks, desc="Translating chunks", leave=False) if len(chunks) > 1 else chunks
 
@@ -604,7 +604,8 @@ class LindatTranslator:
         otherwise keeps the source).
         """
         reason = None
-        for attempt in range(_GUARD_RETRIES + 1):
+        guard_retries = LINDAT_GUARD_RETRIES.get()
+        for attempt in range(guard_retries + 1):
             if attempt >= 2:
                 time.sleep(_BACKOFF_BASE_S * (2 ** (attempt - 2)))
             translated = self._post_with_retry(url, {"input_text": chunk})
@@ -617,11 +618,11 @@ class LindatTranslator:
                 "LINDAT reply looks degenerate (%s); attempt %d/%d for a %d-character chunk.",
                 reason,
                 attempt + 1,
-                _GUARD_RETRIES + 1,
+                guard_retries + 1,
                 len(chunk),
             )
         raise DegenerateTranslationError(
-            f"LINDAT returned degenerate output after {_GUARD_RETRIES + 1} attempt(s): {reason}"
+            f"LINDAT returned degenerate output after {guard_retries + 1} attempt(s): {reason}"
         )
 
     @staticmethod
