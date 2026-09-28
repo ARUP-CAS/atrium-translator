@@ -1,22 +1,22 @@
 {
   "schema_version": "2.0",
   "program": "translator",
-  "tool_version": "v1.2.1-beta",
+  "tool_version": "v1.2.2-beta",
   "repository": "https://github.com/ufal/atrium-translator",
   "runner_ref": "",
   "docker_image": "",
   "python_version": "3.11.0 (main, Oct 27 2022, 10:26:58) [GCC 11.3.0]",
-  "run_id": "260927-084401",
-  "license": "CC BY-NC 4.0",
-  "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
+  "run_id": "260928-113756",
+  "license": "MIT",
+  "license_url": "https://opensource.org/license/mit/",
   "license_detail": {
-    "effective_license": "CC BY-NC 4.0",
-    "effective_license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
-    "is_non_commercial": true,
+    "effective_license": "MIT",
+    "effective_license_url": "https://opensource.org/license/mit/",
+    "is_non_commercial": false,
     "is_share_alike": false,
     "determined_by": [
-      "amcr_vocab",
-      "teater_data"
+      "ctranslate2",
+      "eurollm"
     ],
     "components": [
       {
@@ -33,23 +33,23 @@
       },
       {
         "name": "amcr_vocab",
-        "license": "CC BY-NC 4.0",
-        "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
-        "rank": 5
+        "license": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rank": 0
       },
       {
         "name": "teater_data",
-        "license": "CC BY-NC 4.0",
-        "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
-        "rank": 5
+        "license": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rank": 0
       }
     ],
     "unknown_licenses": [],
-    "notes": "Effective output license is CC BY-NC 4.0, the most restrictive among 4 component(s) used. Outputs are NON-COMMERCIAL: downstream commercial use is not permitted while this component is in the pipeline."
+    "notes": "Effective output license is MIT, the most restrictive among 4 component(s) used."
   },
-  "start_time": "2026-09-27T08:44:01.747583+00:00",
-  "end_time": "2026-09-27T08:47:08.393190+00:00",
-  "duration_seconds": 186.646,
+  "start_time": "2026-09-28T11:37:56.119595+00:00",
+  "end_time": "2026-09-28T11:40:58.381251+00:00",
+  "duration_seconds": 182.262,
   "config": {
     "input_path": "data_samples/my_documents",
     "output_dir": "data_samples/in-place_translated_files/xml",
@@ -64,28 +64,37 @@
     "vocabulary": "data_samples/vocabulary.csv",
     "chunk_limit": 4000,
     "lang_id_model": "facebook/fasttext-language-identification",
+    "ct2_model_family": "eurollm",
+    "ct2_model": "eurollm-1.7b-int8",
+    "ct2_device": "cpu",
+    "ct2_compute_type": "int8",
     "default_source_lang": "cs",
     "fasttext_confidence_threshold": 0.5,
     "lang_id_min_letters": 20,
     "lang_id_languages": "backend-supported",
     "vocabulary_protected_terms": {
       "C-202000543A-DT-27": 2,
-      "C-9141192A": 11,
+      "C-9141192A": 7,
       "C-DT-100003326": 2,
       "C-TX-202500252": 0,
-      "C-N1000019": 7,
+      "C-N1000019": 5,
       "C-N9000080": 1,
-      "C-9115020A": 22,
-      "C-9124095A": 5,
-      "C-9107617A": 2,
+      "C-9115020A": 12,
+      "C-9124095A": 4,
+      "C-9107617A": 1,
       "C-N9007794": 2,
-      "C-N9000112": 10,
+      "C-N9000112": 5,
       "C-TX-202400594": 3,
       "C-9100725A": 5,
       "C-N1000137": 5,
       "C-TX-195304352": 1
     },
-    "vocabulary_protected_terms_total": 78
+    "vocabulary_protected_terms_total": 55,
+    "xsd_validation": {
+      "valid": 15,
+      "invalid": [],
+      "strict": false
+    }
   },
   "statistics": {
     "input_files_total": 15,
@@ -97,10 +106,19 @@
       "json": 0
     },
     "performance_per_minute": {
-      "xml": 4.822,
-      "csv": 4.822,
+      "xml": 4.938,
+      "csv": 4.938,
       "json": 0.0
     }
   },
-  "skipped_files_detail": []
+  "skipped_files_detail": [],
+  "limits_applied": [
+    {
+      "limit": "translation_rerun_rounds",
+      "value": 1,
+      "effect": "skipped",
+      "count": 4,
+      "detail": "field(s) still degenerate after the backend's retries and the re-run kept their source text"
+    }
+  ]
 }

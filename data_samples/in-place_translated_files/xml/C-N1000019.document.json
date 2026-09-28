@@ -6,35 +6,29 @@
     "translated_xml": "C-N1000019_en.xml"
   },
   "provenance": {
-    "license": "CC BY-NC-SA 4.0",
-    "license_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+    "license": "MIT",
+    "license_url": "https://opensource.org/license/mit/",
     "license_detail": {
-      "effective_license": "CC BY-NC-SA 4.0",
-      "effective_license_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
-      "is_non_commercial": true,
-      "is_share_alike": true,
+      "effective_license": "MIT",
+      "effective_license_url": "https://opensource.org/license/mit/",
+      "is_non_commercial": false,
+      "is_share_alike": false,
       "determined_by": [
-        "lindat_cubbitt",
-        "udpipe2_models"
+        "ctranslate2",
+        "eurollm"
       ],
       "components": [
         {
-          "name": "lindat_cubbitt",
-          "license": "CC BY-NC-SA 4.0",
-          "license_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
-          "rank": 6
+          "name": "ctranslate2",
+          "license": "MIT",
+          "license_url": "https://opensource.org/license/mit/",
+          "rank": 1
         },
         {
-          "name": "udpipe2_engine",
-          "license": "MPL 2.0",
-          "license_url": "https://www.mozilla.org/en-US/MPL/2.0/",
-          "rank": 2
-        },
-        {
-          "name": "udpipe2_models",
-          "license": "CC BY-NC-SA 4.0",
-          "license_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
-          "rank": 6
+          "name": "eurollm",
+          "license": "Apache-2.0",
+          "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+          "rank": 1
         },
         {
           "name": "amcr_vocab",
@@ -50,15 +44,15 @@
         }
       ],
       "unknown_licenses": [],
-      "notes": "Effective output license is CC BY-NC-SA 4.0, the most restrictive among 5 component(s) used. Outputs are NON-COMMERCIAL: downstream commercial use is not permitted while this component is in the pipeline. SHARE-ALIKE applies: derivatives must be licensed under the same terms."
+      "notes": "Effective output license is MIT, the most restrictive among 4 component(s) used."
     },
     "contributors": [
       {
         "program": "translator",
-        "run_id": "260928-110452",
-        "paradata_ref": "data_samples/in-place_translated_files/xml/paradata/260928-110452_translator.json",
+        "run_id": "260928-113756",
+        "paradata_ref": "data_samples/in-place_translated_files/xml/paradata/260928-113756_translator.json",
         "blocks": "translations,derived_from",
-        "at": "2026-09-28T11:05:19.485409+00:00"
+        "at": "2026-09-28T11:38:57.455767+00:00"
       }
     ]
   },
@@ -66,15 +60,15 @@
     "blocks": {
       "translations": {
         "program": "translator",
-        "run_id": "260928-110452",
-        "paradata_ref": "data_samples/in-place_translated_files/xml/paradata/260928-110452_translator.json",
-        "updated_at": "2026-09-28T11:05:19.380979+00:00"
+        "run_id": "260928-113756",
+        "paradata_ref": "data_samples/in-place_translated_files/xml/paradata/260928-113756_translator.json",
+        "updated_at": "2026-09-28T11:38:57.412512+00:00"
       },
       "derived_from": {
         "program": "translator",
-        "run_id": "260928-110452",
-        "paradata_ref": "data_samples/in-place_translated_files/xml/paradata/260928-110452_translator.json",
-        "updated_at": "2026-09-28T11:05:19.383776+00:00"
+        "run_id": "260928-113756",
+        "paradata_ref": "data_samples/in-place_translated_files/xml/paradata/260928-113756_translator.json",
+        "updated_at": "2026-09-28T11:38:57.417014+00:00"
       }
     },
     "had_baseline": false,
@@ -83,7 +77,7 @@
   "translations": {
     "source_lang": "cs",
     "target_lang": "en",
-    "backend": "lindat",
+    "backend": "ct2",
     "output_mode": "replace"
   }
 }

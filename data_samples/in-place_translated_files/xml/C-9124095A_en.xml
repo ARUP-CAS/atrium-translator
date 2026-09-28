@@ -34,9 +34,8 @@
       <amcr:datum_ukonceni>1960-12-31</amcr:datum_ukonceni>
       <amcr:hlavni_typ xml:lang="cs" id="HES-001058">skupina/síť sond</amcr:hlavni_typ>
       <amcr:chranene_udaje>
-        <amcr:lokalizace_okolnosti>Spa area in the JV part of the municipality, spring Palliardi, south of building Imperial Spa. Initiative: modification of spring.</amcr:lokalizace_okolnosti>
-        <amcr:souhrn_upresneni>spring was unveiled while editing wooden structure. Subsequent archaeological research has uncovered hazing residues and multiple levels with residues of treated and untreated wood, wooden structures, larger quantities of vegetable macro-residues (pine cones, hazelnuts), several pieces of chipped industry dated to Mesolithic, and fragments of ceramic vessels dated to similar ash fields and the Bronze Age. The research author interpreted the remains of the wooden construction as construction lighter dice from the late Bronze Age.
-Several independent naturalistic analyses have provided information on the form of the surrounding landscape. The research was complicated by high levels of groundwater or mineral springs. Much of the wood elements were degraded by conservation in the laboratory.</amcr:souhrn_upresneni>
+        <amcr:lokalizace_okolnosti>The spa area in the south-western part of the village, the Palliardi spring, south of the Emperor's Spa building. The reason: the spring needs to be regulated.</amcr:lokalizace_okolnosti>
+        <amcr:souhrn_upresneni>During the research, a wooden structure was revealed. The subsequent archaeological research uncovered remains of a pile-dwelling and multiple levels with remnants of processed and unprocessed wood, wooden structures, a large amount of plant macroresidues (hazel nuts, acorns), several pieces of chipped industry dating to the Mesolithic and fragments of ceramic vessels dating to the Late Bronze Age. The research author interpreted the remnants of the wooden structure as a light-weight construction from the Late Bronze Age.</amcr:souhrn_upresneni>
       </amcr:chranene_udaje>
     </amcr:akce>
     <amcr:historie>
@@ -72,13 +71,13 @@ Several independent naturalistic analyses have provided information on the form 
           <amcr:druh xml:lang="cs" id="HES-000491">konstrukční prvek</amcr:druh>
           <amcr:specifikace xml:lang="cs" id="HES-000897">konstrukce dřevěná</amcr:specifikace>
           <amcr:pocet>xx</amcr:pocet>
-          <amcr:poznamka>floor, stakes</amcr:poznamka>
+          <amcr:poznamka>podlaha, kůly</amcr:poznamka>
         </amcr:nalez_objekt>
         <amcr:nalez_objekt>
           <amcr:id>nalo-93683</amcr:id>
           <amcr:druh xml:lang="cs" id="HES-000473">pramen</amcr:druh>
           <amcr:specifikace xml:lang="cs" id="HES-000896">konstrukce kamenná</amcr:specifikace>
-          <amcr:poznamka>Apparently stone reinforcement spring.</amcr:poznamka>
+          <amcr:poznamka>Probably a stone embankment of the spring.</amcr:poznamka>
         </amcr:nalez_objekt>
         <amcr:nalez_predmet>
           <amcr:id>nalp-165933</amcr:id>
@@ -142,7 +141,7 @@ Several independent naturalistic analyses have provided information on the form 
           <amcr:druh xml:lang="cs" id="HES-000705">zlomek keramiky</amcr:druh>
           <amcr:specifikace xml:lang="cs" id="HES-000981">keramika kamenina</amcr:specifikace>
           <amcr:pocet>x</amcr:pocet>
-          <amcr:poznamka>Waldenburg trade good, fractions from mineral water bottles</amcr:poznamka>
+          <amcr:poznamka>Waldenburské zboží, fragments from bottles for mineral water</amcr:poznamka>
         </amcr:nalez_predmet>
       </amcr:komponenta>
       <amcr:komponenta>
