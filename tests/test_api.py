@@ -48,9 +48,22 @@ def test_translate_rejects_non_xml():
     response = client.post(
         "/translate", files={"file": ("test.txt", b"dummy content", "text/plain")}, data={"is_alto": "true"}
     )
-    # §4.4: unusable/invalid input is 422 (harmonized from 400).
+    # §4.4: a type this endpoint does not read is 415 `unsupported_media_type` (a bare 422
+    # before atrium-project#32 round 2; a 400 before that), with the accepted suffix.
+    assert response.status_code == 415
+    body = response.json()
+    assert "Only XML files" in body["detail"]
+    assert (body["reason"], body["accepted"]) == ("unsupported_media_type", [".xml"])
+
+
+def test_translate_refuses_an_unusable_file_name_as_422():
+    """A name that cannot become a file (a bare path, over the length cap) stays a 422:
+    it is unusable input, not a media type."""
+    response = client.post(
+        "/translate", files={"file": ("..", b"<alto/>", "application/xml")}, data={"is_alto": "true"}
+    )
     assert response.status_code == 422
-    assert "Only XML files" in response.json()["detail"]
+    assert response.json()["detail"] == "The upload has no usable file name."
 
 
 def test_translate_upload_size_limit():

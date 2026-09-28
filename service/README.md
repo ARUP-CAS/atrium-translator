@@ -25,19 +25,22 @@ docker compose --profile api up -d
 | GET    | `/ready`     | readiness probe (issue #55) — 503 until the backend has warmed up, 200 while serving, 503 the instant `SIGTERM` arrives. The Kubernetes `readinessProbe`/`startupProbe` target         |
 | POST   | `/translate` | translate one XML document (multipart upload; optional baseline ATRIUM Document JSON)                                                                                                  |
 
-Machine-readable schemas: `GET /openapi.json`, or the Swagger UI at `/docs`, from a
-running server. The repo-root `README.md` covers the CLI and the translation logic itself.
+Machine-readable schemas: the committed [`openapi.json`](openapi.json), which every release also
+attaches (see [OpenAPI](#openapi-the-typed-contract)); or `GET /openapi.json` and the Swagger UI at
+`/docs` from a running server. The repo-root `README.md` covers the CLI and the translation logic
+itself.
 
 ### `POST /translate` (multipart form)
 
-| Field           | In            | Type    | Default       | Meaning                                                                                                                                                                      |
-|-----------------|---------------|---------|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `file`          | form          | file    | —             | **Required.** The XML document. Filename must end in `.xml`.                                                                                                                 |
-| `document_json` | form          | file    | —             | Optional baseline ATRIUM Document JSON to accrete onto.                                                                                                                      |
-| `source_lang`   | form or query | string  | `auto`        | ISO 639-1 code, or `auto`: FastText per block/field, trusted only when confident and translatable, else the element's label, the document's language, `DEFAULT_SOURCE_LANG`. |
-| `target_lang`   | form or query | string  | `en`          | ISO 639-1 code.                                                                                                                                                              |
-| `is_alto`       | form or query | boolean | `true`        | `true` → ALTO dual-pass reconstruction; `false` → XPath metadata mode.                                                                                                       |
-| `output_mode`   | form or query | string  | `OUTPUT_MODE` | `replace` or `append` (issue #46). Unset → the `OUTPUT_MODE` env var, then `replace`; an unknown value degrades to the default with a warning.                               |
+| Field             | In            | Type    | Default       | Meaning                                                                                                                                                                          |
+|-------------------|---------------|---------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `file`            | form          | file    | —             | **Required.** The XML document. Filename must end in `.xml`.                                                                                                                     |
+| `document_json`   | form          | file    | —             | Optional baseline ATRIUM Document JSON to accrete onto, or an AMČR seed (`doc_id`, `source`). One that cannot be opened is a 422 `invalid_record`; an empty part counts as none. |
+| `source_lang`     | form or query | string  | `auto`        | ISO 639-1 code, or `auto`: FastText per block/field, trusted only when confident and translatable, else the element's label, the document's language, `DEFAULT_SOURCE_LANG`.     |
+| `target_lang`     | form or query | string  | `en`          | ISO 639-1 code.                                                                                                                                                                  |
+| `is_alto`         | form or query | boolean | `true`        | `true` → ALTO dual-pass reconstruction; `false` → XPath metadata mode.                                                                                                           |
+| `output_mode`     | form or query | string  | `OUTPUT_MODE` | `replace` or `append` (issue #46). Unset → the `OUTPUT_MODE` env var, then `replace`; an unknown value degrades to the default with a warning.                                   |
+| `response_format` | form or query | string  | `xml`         | `xml`: the translated XML, or `multipart/mixed` with a record (below). `json`: one JSON object instead (atrium-project#32 round 2). Anything else is a 422.                      |
 
 Every field is read from the multipart body first and the query string second (issue #46), so either calling
 style works.
@@ -66,21 +69,37 @@ after its retries — the response carries an `X-Atrium-Limits-Applied` header,
 no limit applied. The full notes, with a sentence each, are the multipart response's
 `limits_applied.json` part and the run's paradata `limits_applied`.
 
-The response carries no JSON envelope by design — the document is the payload, so
+By default the response carries no JSON envelope — the document is the payload, so
 the endpoint composes with `curl -o` and with the pipeline's other stages.
+
+**`response_format=json`** (atrium-project#32 round 2) answers one `application/json` object
+instead, typed in the spec as `TranslateResponse` — the shape a client generated from
+`openapi.json` reads without a multipart parser:
+
+```json
+{"type": "alto", "filename": "CTX000000003-1_en.alto.xml", "media_type": "application/xml",
+ "content": "<?xml version='1.0' encoding='UTF-8'?>\n<alto …>…</alto>",
+ "limits_applied": [],
+ "document_json": {"doc_id": "CTX000000003", "translations": {"…": "…"}, "…": "…"}}
+```
+
+`type` is `alto` or `metadata`; `content` is the translated XML as UTF-8 text; `document_json`
+is present only when a record was sent; `limits_applied` is the full list (the header is still
+set). `paradata` is reserved for the run's provenance (atrium-project#67 R2) and not returned yet.
 
 ### Errors
 
 Harmonised across all five ATRIUM services (`agent_skill_strategy.md` §4.4), so a
 client can treat them uniformly:
 
-| Status | `reason`         | Meaning                | When                                                                                                                                                                                                                                                                                                                 |
-|--------|------------------|------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `413`  | `limit_exceeded` | Payload too large      | A part exceeds `MAX_UPLOAD_MB`, or the declared request exceeds `max_request_mb` (2 × `MAX_UPLOAD_MB` + 1 MB). The declared request size is checked by middleware before the body is read; a request without a declared size is bounded part by part while it is read.                                               |
-| `415`  | `null`           | Unsupported media type | `Content-Type` is neither `multipart/form-data` nor `application/json`.                                                                                                                                                                                                                                              |
-| `422`  | `null`           | Unusable input         | Missing filename, a filename not ending in `.xml`, metadata mode with no XPath targets, or request validation.                                                                                                                                                                                                       |
-| `500`  | `null`           | Translation failed     | The pipeline raised — malformed XML, or the backend failed after retries.                                                                                                                                                                                                                                            |
-| `503`  | `null`           | Shutting down          | After `SIGTERM`. **Retryable** against another replica.                                                                                                                                                                                                                                                              |
+| Status | `reason`                 | Meaning                 | When                                                                                                                                                                                                                                                                   |
+|--------|--------------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `413`  | `limit_exceeded`         | Payload too large       | A part exceeds `MAX_UPLOAD_MB`, or the declared request exceeds `max_request_mb` (2 × `MAX_UPLOAD_MB` + 1 MB). The declared request size is checked by middleware before the body is read; a request without a declared size is bounded part by part while it is read. |
+| `415`  | `unsupported_media_type` | Unsupported media type  | A filename not ending in `.xml` (a 422 before atrium-project#32 round 2; `accepted: [".xml"]`), or a `Content-Type` that is neither `multipart/form-data` nor `application/json` (`accepted` lists both).                                                              |
+| `422`  | `invalid_record`         | Record cannot be opened | The `document_json` part is not UTF-8 JSON, not a JSON object, or has a newer `schema_version` major than this tool reads. It used to fail the translation as a 500.                                                                                                   |
+| `422`  | `null`                   | Unusable input          | A missing or unusable filename, metadata mode with no XPath targets, an unknown `response_format`, or request validation.                                                                                                                                              |
+| `500`  | `null`                   | Translation failed      | The pipeline raised — malformed XML, or the backend failed after retries.                                                                                                                                                                                              |
+| `503`  | `null`                   | Shutting down           | After `SIGTERM`. **Retryable** against another replica.                                                                                                                                                                                                                |
 
 Every error has one JSON body (hub `docs/agent_skill_strategy.md` §4.4, atrium-project#32
 item 2): `{"status": <int>, "reason": <code or null>, "detail": "<text>"}`. `detail` is
@@ -91,6 +110,30 @@ always a string; a `limit_exceeded` body adds `limit` (`key`, `env`, `value`, `o
 {"status": 413, "reason": "limit_exceeded", "detail": "File too large: over 50 MB (MAX_UPLOAD_MB).",
  "limit": {"key": "max_upload_mb", "env": "MAX_UPLOAD_MB", "value": 50.0, "observed": null, "unit": "MB"}}
 ```
+
+## OpenAPI (the typed contract)
+
+The service's OpenAPI document is committed as [`service/openapi.json`](openapi.json) and
+attached to every release as `openapi.json` with its `openapi.json.sha256` (atrium-project#32
+round 2). It is what a client is generated from: every request and response field is typed,
+every error response is the `ErrorBody` above, the registered `reason` codes are listed in
+`x-atrium-reason-codes`, and a returned record is typed by the vendored record schema
+(`AtriumDocument`). `GET /info` reports `openapi_sha256`, the digest of the spec the running
+image serves — equal to the release's `openapi.json.sha256` for an image built from that tag.
+The XML and multipart answers of `/translate` are declared as their media types; the JSON one
+(`response_format=json`) is fully typed.
+
+- **After an API change**, regenerate and commit it:
+  `python atrium_openapi.py export --app service.api:app --out service/openapi.json`.
+  `tests/test_openapi_contract.py` fails while it is stale.
+- **Compatibility.** Each release compares its spec with the previous release's
+  (`release.yml`, `atrium_openapi.py compare` with oasdiff): a breaking change fails the
+  release unless the major version went up (for 0.x, that means 1.0), and a removed reason
+  code always fails. New fields, endpoints and reason codes are additive.
+- **fastapi and pydantic are pinned** exactly (`service/requirements.txt`,
+  `requirements-test.txt`): the spec is generated by them. Bump both by hand and regenerate.
+- **The release bundle** ships `atrium_openapi.py` (the service imports it to finish and digest
+  the spec) and `service/openapi.json`.
 
 ## How it works
 
@@ -231,9 +274,12 @@ signal on purpose so a supervisor sees the real cause. That is a normal stop, no
 ## Tests
 
 ```bash
-pytest -q tests/test_api_contract.py tests/test_service_api_contract.py tests/test_api.py
+pytest -q tests/test_api_contract.py tests/test_service_api_contract.py tests/test_api.py tests/test_openapi_contract.py
 ```
 
 `tests/test_api_contract.py` asserts the §4 meta-contract (including `/ready` and the
-liveness-stays-200-while-draining rule) against the in-process app; the container-level
-equivalent runs in CI via `docker-tool.reusable.yml`'s `probe-targets: '["api"]'`.
+liveness-stays-200-while-draining rule) against the in-process app, and drives `/translate`
+through the real `process_single_file` with a fake backend to hold every JSON response —
+the `response_format=json` 200 and every refusal — to the published schema;
+`tests/test_openapi_contract.py` (vendored from the hub) checks the committed spec itself. The
+container-level equivalent runs in CI via `docker-tool.reusable.yml`'s `probe-targets: '["api"]'`.

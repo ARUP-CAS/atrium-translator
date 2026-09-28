@@ -3,6 +3,19 @@ service/api.py
 
 FastAPI service for the ATRIUM LINDAT Translator.
 Brings this repository into API parity with the rest of the ATRIUM pipeline.
+
+The typed contract (atrium-project#32 round 2). Every route declares its response model
+and its error statuses, so the committed ``service/openapi.json`` — attached to every
+release, and what the AMČR pipeline generates its clients from — types every field.
+``/translate`` answers the translated XML (or multipart/mixed with the record) as before;
+``response_format=json`` asks for one JSON object instead (``TranslateResponse``), the
+shape a generated client reads without a multipart parser. The models below DOCUMENT the
+responses (``response_model=None``), and ``tests/test_api_contract.py`` validates real
+responses against the published schema. Refusals carry registered reasons: an upload that
+is not ``.xml`` is 415 ``unsupported_media_type``, a record that cannot be opened is 422
+``invalid_record``. Regenerate the spec after an API change::
+
+    python atrium_openapi.py export --app service.api:app --out service/openapi.json
 """
 
 import argparse
@@ -14,10 +27,12 @@ import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from atrium_document import canonical_doc_id
 from atrium_limits import LimitExceeded, LimitNotes
@@ -34,32 +49,53 @@ from utils import DEFAULT_OUTPUT_MODE, normalize_output_mode
 # enforced by para-drift.reusable.yml.
 try:
     from .atrium_service import (
+        AtriumDocument,
+        AtriumHTTPError,
+        CreateAction,
+        InfoBase,
+        LimitNote,
         ServiceState,
         add_cors,
         attach_error_handlers,
         attach_health,
         attach_inflight_middleware,
+        attach_openapi_contract,
         build_info,
         error_body,
+        error_responses,
+        operation_id,
+        parse_record_part,
         read_tool_version,
         read_upload_bounded,
         serve_lifecycle,
     )
 except ImportError:
     from atrium_service import (
+        AtriumDocument,
+        AtriumHTTPError,
+        CreateAction,
+        InfoBase,
+        LimitNote,
         ServiceState,
         add_cors,
         attach_error_handlers,
         attach_health,
         attach_inflight_middleware,
+        attach_openapi_contract,
         build_info,
         error_body,
+        error_responses,
+        operation_id,
+        parse_record_part,
         read_tool_version,
         read_upload_bounded,
         serve_lifecycle,
     )
 
 logger = logging.getLogger(__name__)
+
+#: The tool id (/info `service`, the spec's `x-atrium-service`): the repository name.
+SERVICE = "atrium-translator"
 
 # Every limit this service has is declared in tool_limits.py (atrium-project#53, factor III)
 # and read per request. These are the import-time values, kept because tests and clients
@@ -83,6 +119,69 @@ _MIB = 1024 * 1024
 #: Response header carrying the limits-applied summary (atrium-project#53);
 #: atrium_service.EXPOSED_HEADERS lets a browser read it.
 LIMITS_HEADER = "X-Atrium-Limits-Applied"
+
+#: What /translate reads (§4.4 `accepted` of its 415): an XML file, by its name.
+ACCEPTED_SUFFIXES = [".xml"]
+
+
+# ── the typed contract (atrium-project#32 round 2) ──────────────────────────────────────────
+# These models document the responses the handlers build; they do not filter them. A field
+# the handler always sends has no default (required); one it sends only sometimes defaults to
+# None. Descriptions are published in service/openapi.json, so they are written for the client.
+
+#: `response_format` of /translate. `xml` is what the endpoint has always answered.
+ResponseFormat = Literal["xml", "json"]
+
+
+class TranslateResponse(BaseModel):
+    """`/translate` with `response_format=json`: the translated XML and the record in one object."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(description="What the upload was translated as: `alto` (ALTO XML) or `metadata` (AMČR XML).")
+    filename: str = Field(description="The translated file's name, e.g. `CTX000000003-1_en.alto.xml`.")
+    media_type: str = Field(description="The media type of `content`: `application/xml`.")
+    content: str = Field(description="The translated XML document, as UTF-8 text.")
+    limits_applied: List[LimitNote] = Field(
+        description="Every limit that shaped the translation without refusing it (also the response header)."
+    )
+    document_json: Optional[AtriumDocument] = Field(
+        None,
+        description=(
+            "Only when a record was sent as `document_json`: the record with the translator's `translations` "
+            "block and `derived_from.translated_xml` added."
+        ),
+    )
+    paradata: Optional[CreateAction] = Field(
+        None,
+        description="The run's provenance (atrium-project#67 R2). Not returned yet: always absent.",
+    )
+
+
+class TranslatorInfo(InfoBase):
+    """`/info` of atrium-translator."""
+
+    supported_formats: List[str] = Field(description="The kinds of XML `/translate` reads.")
+
+
+#: The 200 of /translate in its three shapes (the JSON one is TranslateResponse, added by FastAPI).
+_TRANSLATE_200: Dict[str, Any] = {
+    "description": (
+        "The translated XML (`application/xml`, as an attachment). With a record sent, `multipart/mixed`: the "
+        "XML, the record (`application/json`) and `limits_applied.json`. With `response_format=json`, one "
+        "`TranslateResponse`."
+    ),
+    "headers": {
+        LIMITS_HEADER: {
+            "description": "`key=effect:count; …` for each limit that applied; absent when none did.",
+            "schema": {"type": "string"},
+        }
+    },
+    "content": {
+        "application/xml": {"schema": {"type": "string"}},
+        "multipart/mixed": {"schema": {"type": "string"}},
+    },
+}
 
 
 def _reject_oversized_envelope(request: Request) -> None:
@@ -239,6 +338,12 @@ app = FastAPI(
     description="Automated pipeline for the translation and enrichment of archaeological archival collections.",
     version=read_tool_version(Path(__file__).resolve().parent),
     lifespan=lifespan,
+    # The typed contract (atrium-project#32 round 2): every route documents the §4.4 error
+    # body for 422 and 500 (and FastAPI's own 422 body, which is not what is sent, goes);
+    # operationIds are the handler names; the spec never depends on a root_path.
+    responses=error_responses(422, 500),
+    generate_unique_id_function=operation_id,
+    root_path_in_servers=False,
 )
 attach_inflight_middleware(app, _state)
 
@@ -263,6 +368,8 @@ async def _refuse_oversized_translate_request(request: Request, call_next):
 
 # §4.4 error body {status, reason, detail} for every error (atrium-project#32 item 2, #53).
 attach_error_handlers(app)
+# The published spec: reason registry, record schema, service id (atrium-project#32 item 3).
+attach_openapi_contract(app, SERVICE)
 
 # CORS — standard §4.5 configuration (ALLOWED_ORIGINS CSV, default "*").
 add_cors(app)
@@ -316,17 +423,35 @@ async def verify_content_type(request: Request):
     if request.method in ("POST", "PUT"):
         content_type = request.headers.get("Content-Type", "")
         if not content_type.startswith("application/json") and not content_type.startswith("multipart/form-data"):
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"Unsupported media type: {content_type}. Expected application/json or multipart/form-data.",
+            # §4.4: the registered reason and the accepted types (atrium-project#32 round 2).
+            raise AtriumHTTPError(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                f"Unsupported media type: {content_type}. Expected application/json or multipart/form-data.",
+                reason="unsupported_media_type",
+                accepted=["application/json", "multipart/form-data"],
             )
 
 
-@app.post("/translate", dependencies=[Depends(verify_content_type)])
+@app.post(
+    "/translate",
+    dependencies=[Depends(verify_content_type)],
+    response_model=None,
+    responses={200: {"model": TranslateResponse, **_TRANSLATE_200}, **error_responses(413, 415, 503)},
+)
 async def translate_document(
     request: Request,
-    file: UploadFile = File(...),
-    document_json: UploadFile = File(None, description="Optional baseline ATRIUM Document JSON (accretion model)"),
+    file: UploadFile = File(..., description="The XML to translate: ALTO XML, or AMČR metadata XML (`is_alto=false`)."),
+    document_json: UploadFile = File(
+        None,
+        description=(
+            "Optional baseline ATRIUM Document JSON (accretion model), or an AMČR seed (`doc_id`, `source`). When "
+            "given, the record comes back with the translator's `translations` block added: as the second part of "
+            "the multipart/mixed response, or as `document_json` with `response_format=json`. A record that does "
+            "not validate against atrium_document.schema.json is still accepted (rule 6); one that cannot be "
+            "opened is refused (422 `invalid_record`). An empty part counts as none."
+        ),
+        json_schema_extra={"contentMediaType": "application/json"},
+    ),
     # Declared as Form(None) and resolved against the query string below, because
     # callers are genuinely split and both shapes must keep working.
     #
@@ -336,10 +461,32 @@ async def translate_document(
     # also the default. But other callers (test_translate_real_pipeline_keeps_the_
     # multi_dot_doc_id) pass `?source_lang=cs` in the query and rely on it being
     # read. Binding strictly to either source breaks the other half. (issue #46)
-    source_lang: str = Form(None),
-    target_lang: str = Form(None),
-    is_alto: bool = Form(None),
-    output_mode: str = Form(None, description="replace | append — see issue #46"),
+    source_lang: Optional[str] = Form(
+        None, description="The source language, or `auto` (the default) to detect it. Also read from the query."
+    ),
+    target_lang: Optional[str] = Form(
+        None, description="The target language; `en` by default. Also read from the query."
+    ),
+    is_alto: Optional[bool] = Form(
+        None, description="`true` (the default): ALTO XML; `false`: AMČR metadata XML. Also read from the query."
+    ),
+    # An open string, not an enum: any case is accepted, and an unknown value falls back to
+    # the default with a warning (utils.normalize_output_mode) — an enum would refuse input
+    # that works today (atrium-project#32 round 2, rule 2).
+    output_mode: Optional[str] = Form(
+        None,
+        description=(
+            "`replace` (the default, or the OUTPUT_MODE setting) or `append` — see issue #46. Also read from the query."
+        ),
+    ),
+    response_format: Optional[ResponseFormat] = Form(
+        None,
+        description=(
+            "`xml` (the default): the translated XML, or multipart/mixed when a record was sent. `json`: one "
+            "`TranslateResponse` object with the XML as text and the record as `document_json`. Also read from "
+            "the query."
+        ),
+    ),
 ):
     _refuse_if_draining()
 
@@ -348,6 +495,11 @@ async def translate_document(
     target_lang = target_lang or qp.get("target_lang") or "en"
     if is_alto is None:
         is_alto = _as_bool(qp.get("is_alto"), default=True)
+    # The form field is validated by its enum; the query value is checked here, so both
+    # sources refuse an unknown format alike (422) rather than falling back silently.
+    response_format = response_format or qp.get("response_format") or "xml"
+    if response_format not in ("xml", "json"):
+        raise HTTPException(status_code=422, detail="response_format must be 'xml' or 'json'.")
 
     # CLI precedence, mirrored: explicit request field wins, then OUTPUT_MODE, then
     # the shipped default. An unrecognised value degrades to the default with a
@@ -359,9 +511,19 @@ async def translate_document(
     )
 
     upload_name = _safe_file_name(file.filename)
-    if not upload_name or not upload_name.endswith(".xml"):
-        # §4.4: unusable/invalid input is 422 (harmonized from 400).
-        raise HTTPException(status_code=422, detail="Only XML files are supported.")
+    if not upload_name:
+        # §4.4: an unusable name (missing, a bare path, unprintable, over the length cap) is
+        # unusable input, 422 — it cannot become a file in the request's directory.
+        raise HTTPException(status_code=422, detail="The upload has no usable file name.")
+    if not upload_name.endswith(".xml"):
+        # §4.4: a file of a type this endpoint does not read is 415 `unsupported_media_type`
+        # (a bare 422 before atrium-project#32 round 2), with the accepted suffix in the body.
+        raise AtriumHTTPError(
+            415,
+            "Only XML files are supported.",
+            reason="unsupported_media_type",
+            accepted=ACCEPTED_SUFFIXES,
+        )
 
     # Metadata mode with no XPath targets cannot translate anything. It used to
     # return 200 and an unchanged document, which is the worst possible answer: the
@@ -382,18 +544,28 @@ async def translate_document(
     upload_mb = MAX_UPLOAD.get()
     content = await read_upload_bounded(file, upload_mb, "File")
 
+    # The record, read and opened before any translation, so one that cannot be opened is
+    # refused up front (422 `invalid_record`, atrium-project#32 round 2): it used to reach
+    # process_single_file, which logged a skip, and the endpoint answered a 500 "Translation
+    # processing failed." An empty part counts as none. The bytes go on as sent.
+    baseline_bytes = None
+    if document_json is not None:
+        raw = await read_upload_bounded(document_json, upload_mb, "Baseline document JSON")
+        if parse_record_part(raw, "document_json") is not None:
+            baseline_bytes = raw
+
     with tempfile.TemporaryDirectory() as tmpdir:
         work_dir = Path(tmpdir)
         input_path = work_dir / upload_name
         input_path.write_bytes(content)
 
         doc_json_path = None
-        if document_json:
+        if baseline_bytes is not None:
             baseline_name = _safe_file_name(document_json.filename) or "baseline.json"
             if baseline_name == upload_name:
                 baseline_name = "baseline.json"
             doc_json_path = work_dir / baseline_name
-            doc_json_path.write_bytes(await read_upload_bounded(document_json, upload_mb, "Baseline document JSON"))
+            doc_json_path.write_bytes(baseline_bytes)
 
         # D3/D11 (atrium-project#10): the same derivation process_single_file() uses, so the
         # filename this endpoint promises the client and the doc_id the record is keyed on
@@ -537,7 +709,7 @@ async def translate_document(
 
         json_bytes = None
         # Only attach the multipart JSON response if the client opted into the flow
-        if document_json and doc_json_out_path.exists():
+        if baseline_bytes is not None and doc_json_out_path.exists():
             with open(doc_json_out_path, "rb") as fh:
                 json_bytes = fh.read()
 
@@ -547,6 +719,22 @@ async def translate_document(
     # as a third part, `limits_applied.json`, always present (`[]` when nothing applied).
     limits_header = limit_notes.header_summary()
     extra_headers = {LIMITS_HEADER: limits_header} if limits_header else {}
+
+    # response_format=json (atrium-project#32 round 2): the same result as one typed JSON
+    # object — the shape a client generated from the spec reads without a multipart parser.
+    # The XML is UTF-8 (utils writes it so); the record is the same bytes the multipart
+    # form carries.
+    if response_format == "json":
+        payload: Dict[str, Any] = {
+            "type": "alto" if is_alto else "metadata",
+            "filename": out_filename,
+            "media_type": "application/xml",
+            "content": xml_bytes.decode("utf-8"),
+            "limits_applied": limit_notes.as_list(),
+        }
+        if json_bytes:
+            payload["document_json"] = json.loads(json_bytes)
+        return JSONResponse(payload, headers=extra_headers)
 
     # Deliver multipart/mixed response if document_json is active and generated, allowing
     # clients to retrieve both the updated ATRIUM Document JSON and the resulting ALTO XML.
@@ -579,11 +767,15 @@ async def translate_document(
     )
 
 
-@app.get("/info")
+@app.get(
+    "/info",
+    response_model=None,
+    responses={200: {"model": TranslatorInfo, "description": "Identity, limits, capabilities."}},
+)
 async def get_info():
     return build_info(
         app,
-        service="atrium-translator",
+        service=SERVICE,
         limits=LIMITS,
         supported_formats=["ALTO XML", "AMCR Metadata XML"],
     )
