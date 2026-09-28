@@ -30,16 +30,28 @@ _active = threading.local()
 def collecting(notes: Optional[LimitNotes] = None) -> Iterator[LimitNotes]:
     """Collect the notes made in this thread until the block exits; yields the collector."""
     collector = notes if notes is not None else LimitNotes()
-    previous = getattr(_active, "notes", None)
-    _active.notes = collector
+    previous = getattr(_active, "notes", None), getattr(_active, "seen", None)
+    _active.notes, _active.seen = collector, set()
     try:
         yield collector
     finally:
-        _active.notes = previous
+        _active.notes, _active.seen = previous
 
 
-def note(spec: LimitSpec, effect: str, count: int = 1, detail: str = "") -> None:
-    """Record that ``spec`` shaped the result, if a collector is open in this thread."""
+def note(spec: LimitSpec, effect: str, count: int = 1, detail: str = "", *, key: Optional[str] = None) -> None:
+    """Record that ``spec`` shaped the result, if a collector is open in this thread.
+
+    With *key* (e.g. the segment's text), a second note for the same limit, effect and key
+    within one collector is dropped: the end-of-document re-run sends a segment again, and
+    it is still one segment that the limit shaped.
+    """
     collector: Optional[LimitNotes] = getattr(_active, "notes", None)
-    if collector is not None:
-        collector.note(spec, effect, count, detail)
+    if collector is None:
+        return
+    if key is not None:
+        seen = _active.seen
+        marker = (spec.key, effect, key)
+        if marker in seen:
+            return
+        seen.add(marker)
+    collector.note(spec, effect, count, detail)

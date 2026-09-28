@@ -8,7 +8,7 @@ data_samples/
 ├── my_documents/                 inputs: 15 AMCR metadata records + MTX201501307_anon.alto.xml
 ├── in-place_translated_files/    --output-mode replace (the default)
 │   ├── alto/                     the ALTO sample                         (lindat)
-│   └── xml/                      the AMCR records                        (ct2 — EuroLLM-1.7B, see below)
+│   └── xml/                      the AMCR records                        (lindat)
 └── appended_translated_files/    --output-mode append
     ├── alto/                                                             (lindat)
     └── xml/                                                              (lindat)
@@ -20,26 +20,14 @@ Which run produced each folder — each `paradata/` folder holds that run's reco
 |----------------------------------|--------------------------------------------------|-----------------|----------|-----------------|--------------------------|
 | `in-place_translated_files/alto` | `lindat` (LINDAT CUBBITT)                        | `auto`          | —        | `260926-122251` | 2095 `ok`                |
 | `appended_translated_files/alto` | `lindat`                                         | `auto`          | —        | `260926-120736` | 2095 `ok`                |
-| `in-place_translated_files/xml`  | **`ct2`** — EuroLLM-1.7B-Instruct, int8, CPU     | `cs`            | AMCR 2.2 | `260927-084401` | 30 `ok`, 7 `untranslated` |
+| `in-place_translated_files/xml`  | `lindat`                                         | `cs`            | AMCR 2.2 | `260928-110452` | 37 `ok`                  |
 | `appended_translated_files/xml`  | `lindat`                                         | `auto`          | —        | `260926-140310` | 37 `ok`                  |
 
-> **The AMCR replace folder is a `ct2` run, not the LINDAT default** that AMČR's production run uses. It was
-> made on 2026-09-27 with the self-hosted backend of issue #4 (EuroLLM-1.7B-Instruct converted to CTranslate2 int8,
-> `--vocabulary data_samples/vocabulary.csv`, all 15 records valid against AMCR 2.2). Two things to know when reading
-> it:
->
-> * **13 of its 30 `ok` fields contain the prompt glossary**, not only the translation — e.g. `C-N1000019`
->   `poznamka` starts with `Use these exact terms: point = point`, and `C-DT-100003326` `popis` is nothing but
->   `Terrain edge = terrain edge; Hillfort = hillfort`. That run predates the fix in `processors/ct2_translator.py`
->   (glossary moved out of the text, echoed prompt removed, a glossary-only or copied reply re-requested without the
->   glossary). Replayed on these 37 replies, the fix cleans 6, re-requests 7 and leaves the other 17 as they are.
->   Regenerate the folder with the command below before quoting it.
-> * The 7 `untranslated` fields were still rejected after the end-of-document re-run (a length ratio of 0.12–0.21
->   on long fields, 5.9 and 88 on two short `nazev` fields, a runaway reply for a one-word `poznamka`): their Czech
->   is kept and the target cell of the log is empty, as the guard intends.
->
-> For the LINDAT replace output of the same records, use `--backend lindat` (the default) with the replace command
-> below; the last committed LINDAT replace set is in git history at `3bc8a0e` (run `260926-140045`).
+> **The AMCR replace folder is the shape of AMČR's production run** (issue #46): LINDAT, `replace`,
+> `--source_lang cs`, validated against AMCR 2.2 with `--xsd`, made with v1.2.2-beta on 2026-09-28. All 15 records
+> were translated; the 37 degenerate LINDAT replies of the run were re-requested and recovered (`lindat_degenerate_replies`
+> in its paradata), so every field is `ok`. The first `ct2` (EuroLLM-1.7B) run of these records, from 2026-09-27, is in
+> git history at `1e1ce67`; it predates the EuroLLM prompt fix.
 
 Each folder holds, per input document:
 
@@ -73,12 +61,12 @@ from its own translation, so no number moves to its neighbour's row.
 
 > The `.document.json` of both ALTO samples and of the first AMCR record of the append folder state **CC BY-NC 4.0**
 > (`fasttext` only): they were written before the backend's licence components were recorded, which later code
-> fixes. Those runs' paradata and their other records state the run's actual licence, **CC BY-NC-SA 4.0**. The next
-> LINDAT refresh below rewrites them. The `ct2` replace folder states **CC BY-NC 4.0** because of the AMCR/TEATER
-> vocabulary, which was labelled CC BY-NC 4.0 when it ran. AMČR, the rights holder, has since stated that both
-> vocabularies are CC0 ([atrium-project#6](https://github.com/ufal/atrium-project/issues/6#issuecomment-5867861653),
-> 2026-09-28), so the same run now resolves to **MIT** (CTranslate2; EuroLLM is Apache-2.0). The committed records keep
-> the label they were written with.
+> fixes. Those runs' paradata and their other records state the run's actual licence, **CC BY-NC-SA 4.0**; the replace
+> folder's records (v1.2.2-beta) all do. The next LINDAT refresh below rewrites the others. The AMCR/TEATER vocabulary
+> is **CC0**, as its rights holder AMČR stated
+> ([atrium-project#6](https://github.com/ufal/atrium-project/issues/6#issuecomment-5867861653), 2026-09-28); paradata
+> written before v1.2.2-beta labels it CC BY-NC 4.0. With LINDAT that changes nothing: LINDAT and the UDPipe models are
+> CC BY-NC-SA 4.0. A `ct2` EuroLLM run with the vocabulary and `--source_lang cs` resolves to **MIT**.
 >
 > **`vocabulary.csv`** (AMCR `heslo` + TEATER terms, harvested by `load_vocab.py`) is **CC0** per that statement. The
 > other files here stay under [LICENSE](LICENSE) (CC BY-NC 4.0).
@@ -102,26 +90,28 @@ python main.py data_samples/my_documents/MTX201501307_anon.alto.xml --alto \
     --output data_samples/appended_translated_files/alto --output-mode append
 
 # AMCR metadata (a metadata run leaves *.alto.xml out of a directory scan) — LINDAT
+# replace: the production shape of issue #46
 python main.py data_samples/my_documents --xpaths amcr-fields.txt --formats xml \
-    --source_lang auto --vocabulary data_samples/vocabulary.csv \
+    --source_lang cs --vocabulary data_samples/vocabulary.csv \
+    --xsd https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd \
     --output data_samples/in-place_translated_files/xml --output-mode replace
 python main.py data_samples/my_documents --xpaths amcr-fields.txt --formats xml \
     --source_lang auto --vocabulary data_samples/vocabulary.csv \
     --output data_samples/appended_translated_files/xml --output-mode append
 ```
 
-The committed AMCR replace folder is the `ct2` run instead — the self-hosted EuroLLM backend (issue #4; install
-`requirements-ct2.txt`, convert the model as in [docs/translation-backends.md](../docs/translation-backends.md)):
+The same records through the self-hosted `ct2` EuroLLM backend (issue #4; install `requirements-ct2.txt`, convert the
+model as in [docs/translation-backends.md](../docs/translation-backends.md)) — into a folder of its own, so the
+committed LINDAT set stays as it is:
 
 ```bash
 export CT2_MODEL_DIR="$PWD/models/ct2/eurollm-1.7b-int8" CT2_MODEL_FAMILY=eurollm \
        CT2_TOKENIZER_DIR="$PWD/models/hf/EuroLLM-1.7B-Instruct" \
        CT2_DEVICE=cpu CT2_COMPUTE_TYPE=int8 CT2_LANGUAGES=cs,en
-rm -f data_samples/in-place_translated_files/xml/paradata/*.json
 python main.py data_samples/my_documents --xpaths amcr-fields.txt --formats xml \
     --backend ct2 --source_lang cs --vocabulary data_samples/vocabulary.csv \
     --xsd https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd \
-    --output data_samples/in-place_translated_files/xml --output-mode replace
+    --output /tmp/ct2_translated_files/xml --output-mode replace
 ```
 
 ## Sample inputs

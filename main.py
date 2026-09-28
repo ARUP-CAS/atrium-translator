@@ -323,6 +323,13 @@ def parse_arguments():
     parser.add_argument("--xpaths", type=Path, default=None, help="Path to a file listing AMCR XPath targets.")
     parser.add_argument("--xsd", type=str, default=None, help="URL or path to XSD schema for output validation.")
     parser.add_argument(
+        "--xsd-strict",
+        action="store_true",
+        default=None,
+        help="With --xsd: a translated record that fails validation counts as a failed document "
+        "(exit 3; the XML is still written). Default: env XSD_STRICT, else off (a WARNING only).",
+    )
+    parser.add_argument(
         "--vocabulary",
         type=Path,
         default=None,
@@ -415,6 +422,8 @@ def parse_arguments():
         args.backend = defaults.get("translation_backend") or os.environ.get("TRANSLATION_BACKEND") or "lindat"
     if args.xpaths is None and "fields" in defaults:
         args.xpaths = Path(defaults["fields"])
+    if args.xsd_strict is None:
+        args.xsd_strict = os.environ.get("XSD_STRICT", "").strip().lower() in ("1", "true", "yes", "on")
     if args.output_mode is None:
         # Same precedence chain as --backend: CLI wins, then config.txt, then the
         # environment, then the shipped default. OUTPUT_MODE is read here as well
@@ -493,6 +502,7 @@ def process_single_file(
     _logger: ParadataLogger,
     xsd_schema=None,
     lang_policy: SourceLanguagePolicy | None = None,
+    xsd_verdicts: dict | None = None,
 ) -> tuple[bool, int]:
     """
     Process a single XML file (ALTO or metadata).
@@ -500,7 +510,9 @@ def process_single_file(
 
     *xsd_schema* is a precompiled ``etree.XMLSchema`` (or ``None``).
     It is compiled once in ``main()`` via ``load_xsd`` rather than
-    per-file to avoid redundant network round-trips (M2).
+    per-file to avoid redundant network round-trips (M2). With a schema, the
+    verdict of a metadata record is stored in *xsd_verdicts* (when given) as
+    ``{file name: (doc_id, valid)}``, for the run's summary and paradata.
 
     *lang_policy* is the source-language policy for ``--source_lang auto``
     (built once in ``main()``); ``None`` lets ``utils`` build it from the
@@ -598,7 +610,7 @@ def process_single_file(
                     )
                     xml_written = True
                 else:
-                    process_metadata_xml(
+                    xsd_valid = process_metadata_xml(
                         file_path,
                         output_file,
                         xpaths_list,
@@ -615,6 +627,8 @@ def process_single_file(
                         lang_policy=lang_policy,
                     )
                     xml_written = True
+                    if xsd_verdicts is not None and xsd_valid is not None:
+                        xsd_verdicts[file_path.name] = (doc_id, bool(xsd_valid))
 
                 # The translation is done, so the components it used are known: record
                 # them BEFORE the record takes the licence block, or the first record
@@ -728,6 +742,7 @@ def main() -> int:
         _components_logged = False
         protected_by_doc: dict[str, int] = {}
         degenerate_by_doc: dict[str, int] = {}
+        xsd_verdicts: dict[str, tuple[str, bool]] = {}
 
         xpaths_list: list[str] = []
         if args.xpaths and args.xpaths.exists():
@@ -815,6 +830,7 @@ def main() -> int:
                 _logger=_logger,
                 xsd_schema=xsd_schema,
                 lang_policy=lang_policy,
+                xsd_verdicts=xsd_verdicts,
             )
 
             if not success:
@@ -865,6 +881,29 @@ def main() -> int:
             if isinstance(self_cfg, dict):
                 self_cfg["lindat_degenerate_replies"] = dict(degenerate_by_doc)
                 self_cfg["lindat_degenerate_replies_total"] = sum(degenerate_by_doc.values())
+
+        # The XSD verdict of every record, in one place: the per-file WARNING scrolls away in
+        # a long run, and the paradata could not say whether a run's output validated.
+        if xsd_schema is not None and xsd_verdicts:
+            invalid = [(name, doc) for name, (doc, ok) in xsd_verdicts.items() if not ok]
+            valid = len(xsd_verdicts) - len(invalid)
+            self_cfg = getattr(_logger, "config", None)
+            if isinstance(self_cfg, dict):
+                self_cfg["xsd_validation"] = {
+                    "valid": valid,
+                    "invalid": sorted(doc for _, doc in invalid),
+                    "strict": bool(args.xsd_strict),
+                }
+            if invalid:
+                print(
+                    f"[WARN] XSD: {valid}/{len(xsd_verdicts)} record(s) valid; invalid: "
+                    f"{', '.join(sorted(doc for _, doc in invalid))}"
+                    + (" — counted as failed (--xsd-strict)." if args.xsd_strict else ".")
+                )
+                if args.xsd_strict:
+                    failed_files.extend(name for name, _ in invalid if name not in failed_files)
+            else:
+                print(f"[INFO] XSD: {valid}/{len(xsd_verdicts)} record(s) valid.")
 
         # The paradata folder is created when the run STARTS; a long run can outlive
         # it — e.g. git removing the folder once its last tracked record was deleted.

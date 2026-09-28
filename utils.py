@@ -905,6 +905,7 @@ def process_metadata_xml(
                 },
             )
 
+        is_valid = None  # the XSD verdict, returned to the caller; None without a schema
         if xsd_schema:
             logger.info("%s: validating %s against XSD …", log_doc_id, output_path.name)
             is_valid, error_log = validate_xml_with_xsd(tree, xsd_schema)
@@ -923,6 +924,7 @@ def process_metadata_xml(
             pretty_print=False,
         )
         logger.info("%s: saved metadata translation → %s", log_doc_id, output_path)
+        return is_valid
 
     except Exception as e:
         logger.error(

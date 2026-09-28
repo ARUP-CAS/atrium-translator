@@ -376,3 +376,73 @@ def test_a_reply_still_going_at_the_budget_is_a_runaway(monkeypatch):
     monkeypatch.setattr(_FakeGenerator, "generated", ["zlomky"] * 44)
     with pytest.raises(DegenerateTranslationError, match="runaway length: still going at 44 tokens"):
         backend.translate("zlomky", "cs", "en")
+
+
+# ── warm-up and one load under concurrency (the service's first requests) ───────────────
+
+
+def test_warm_loads_the_engine_and_the_eurollm_tokenizer(monkeypatch):
+    tokenizer = _FakeTokenizer()
+    backend = _eurollm(monkeypatch, tokenizer)
+    backend.warm()
+    assert backend._engine is not None
+    assert backend._tokenizer is tokenizer
+
+
+def test_concurrent_first_requests_load_the_model_once(monkeypatch):
+    import threading
+    import time
+
+    tokenizer = _FakeTokenizer()
+    _install_fake_modules(monkeypatch, tokenizer)
+    loads = []
+
+    class _SlowGenerator(_FakeGenerator):
+        def __init__(self, *args, **kwargs):
+            loads.append(1)
+            time.sleep(0.05)  # long enough for the other threads to arrive
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(sys.modules["ctranslate2"], "Generator", _SlowGenerator)
+    backend = CT2Translator(model_dir="/m", tokenizer_dir="/hf", family="eurollm")
+    threads = [threading.Thread(target=backend.warm) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(loads) == 1
+
+
+def _run_lifespan(monkeypatch, backend):
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    import service.api as api
+
+    @asynccontextmanager
+    async def _no_lifecycle(state):
+        yield
+
+    monkeypatch.setattr(api, "get_backend", lambda *a, **k: backend)
+    monkeypatch.setattr(api, "LanguageIdentifier", lambda: None)
+    monkeypatch.setattr(api, "serve_lifecycle", _no_lifecycle)
+    monkeypatch.setattr(api._state, "warm", False)
+
+    async def _enter():
+        async with api.lifespan(api.app):
+            return api._state.warm
+
+    return asyncio.run(_enter())
+
+
+def test_the_service_loads_a_ct2_model_at_startup(monkeypatch):
+    tokenizer = _FakeTokenizer()
+    backend = _eurollm(monkeypatch, tokenizer)
+    assert _run_lifespan(monkeypatch, backend) is True  # /ready's flag, set after the load
+    assert backend._engine is not None and backend._tokenizer is tokenizer
+
+
+def test_a_ct2_configuration_error_stops_the_service_at_startup(monkeypatch):
+    backend = CT2Translator(model_dir="", family="eurollm")  # CT2_MODEL_DIR unset
+    with pytest.raises(TranslationError, match="CT2_MODEL_DIR"):
+        _run_lifespan(monkeypatch, backend)

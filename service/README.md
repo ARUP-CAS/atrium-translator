@@ -76,7 +76,7 @@ client can treat them uniformly:
 
 | Status | `reason`         | Meaning                | When                                                                                                                                                                                                                                                                                                                 |
 |--------|------------------|------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `413`  | `limit_exceeded` | Payload too large      | A part exceeds `MAX_UPLOAD_MB`, or the declared request exceeds `max_request_mb` (2 × `MAX_UPLOAD_MB` + 1 MB). Checked in the handler, after FastAPI has parsed the multipart body (Starlette spools a large part to a temporary file first), so cap the body at the ingress too, e.g. nginx `client_max_body_size`. |
+| `413`  | `limit_exceeded` | Payload too large      | A part exceeds `MAX_UPLOAD_MB`, or the declared request exceeds `max_request_mb` (2 × `MAX_UPLOAD_MB` + 1 MB). The declared request size is checked by middleware before the body is read; a request without a declared size is bounded part by part while it is read.                                               |
 | `415`  | `null`           | Unsupported media type | `Content-Type` is neither `multipart/form-data` nor `application/json`.                                                                                                                                                                                                                                              |
 | `422`  | `null`           | Unusable input         | Missing filename, a filename not ending in `.xml`, metadata mode with no XPath targets, or request validation.                                                                                                                                                                                                       |
 | `500`  | `null`           | Translation failed     | The pipeline raised — malformed XML, or the backend failed after retries.                                                                                                                                                                                                                                            |
@@ -173,7 +173,7 @@ checks this table against `tool_limits.py` and `.env.example`.
 | Key (`/info`)              | Variable                                     | Default | Unit    | Over the limit                                                                                         |
 |----------------------------|----------------------------------------------|---------|---------|--------------------------------------------------------------------------------------------------------|
 | `max_upload_mb`            | `MAX_UPLOAD_MB`                              | 50      | MB      | 413 `limit_exceeded` — per part: the XML and the baseline document JSON                                |
-| `max_request_mb`           | — (derived from `MAX_UPLOAD_MB`: 2 × it + 1) | —       | MB      | 413 `limit_exceeded`, from the declared `Content-Length`, once the multipart body has been parsed      |
+| `max_request_mb`           | — (derived from `MAX_UPLOAD_MB`: 2 × it + 1) | —       | MB      | 413 `limit_exceeded`, from the declared `Content-Length`, before the body is read                      |
 | `translation_chunk_chars`  | `TRANSLATION_CHUNK_CHARS`                    | 4000    | chars   | translated in full, in pieces re-joined with a line break — `split` note                               |
 | `lang_id_segment_chars`    | `LANG_ID_SEGMENT_CHARS`                      | 2000    | chars   | `source_lang=auto`: the segment's language is decided on its first N characters — `sampled` note       |
 | `lang_id_document_chars`   | `LANG_ID_DOCUMENT_CHARS`                     | 20000   | chars   | `source_lang=auto`: the document's language is decided on its first N characters — `sampled` note      |
@@ -203,6 +203,11 @@ vendored `service/healthcheck.py`) and `STOPSIGNAL SIGTERM`, and sets
 `ENV GRACEFUL_SHUTDOWN_S=20`, which `service/api.py`'s `__main__` block passes to uvicorn
 as `timeout_graceful_shutdown`. (It was the `--timeout-graceful-shutdown 20` CLI flag until
 issue #58 moved the whole start command into that block so `$PORT` could be honoured.)
+
+With `TRANSLATION_BACKEND=ct2` the model — and EuroLLM's tokenizer — is loaded during startup, before
+`GET /ready` turns 200: a configuration error (`CT2_MODEL_DIR` unset, a missing tokenizer, an unsupported
+`CT2_COMPUTE_TYPE`) stops the service instead of failing the first request, and concurrent first requests share one
+load. The published images do not include `requirements-ct2.txt`; a `ct2` service needs an image that does.
 
 On `SIGTERM` the service flips `GET /ready` to **503** at once so an orchestrator stops
 routing to it, answers new `/translate` calls with 503, and lets in-flight translation

@@ -448,3 +448,34 @@ def test_an_oversized_upload_gets_the_harmonised_body(monkeypatch):
     body = response.json()
     assert body["reason"] == "limit_exceeded" and body["limit"]["env"] == "MAX_UPLOAD_MB"
     assert body["detail"] == "File too large: over 0.001 MB (MAX_UPLOAD_MB)."
+
+
+def test_a_segment_split_twice_is_one_split_note(monkeypatch):
+    """(atrium-project#53 follow-up) the end-of-document re-run sends a split segment again;
+    the note counts segments, not calls."""
+    monkeypatch.setenv("TRANSLATION_CHUNK_CHARS", "100")
+    segment = "\n".join(["Věta o hradu a mostu, která je dlouhá."] * 6)
+    other = "\n".join(["Jiná věta o kostele na náměstí, také dlouhá."] * 6)
+    with collecting() as notes:
+        chunk_for_translation(segment)
+        chunk_for_translation(segment)  # the re-run
+        chunk_for_translation(other)
+    [entry] = notes.as_list()
+    assert (entry["limit"], entry["effect"], entry["count"]) == ("translation_chunk_chars", "split", 2)
+
+
+def test_notes_without_a_key_still_add_up():
+    with collecting() as notes:
+        note(TRANSLATION_CHUNK_CHARS, "split", 1)
+        note(TRANSLATION_CHUNK_CHARS, "split", 1)
+    assert notes.as_list()[0]["count"] == 2
+
+
+def test_the_seen_keys_belong_to_one_collector(monkeypatch):
+    monkeypatch.setenv("TRANSLATION_CHUNK_CHARS", "100")
+    segment = "\n".join(["Věta o hradu a mostu, která je dlouhá."] * 6)
+    with collecting() as first:
+        chunk_for_translation(segment)
+    with collecting() as second:  # the next document
+        chunk_for_translation(segment)
+    assert first.as_list()[0]["count"] == second.as_list()[0]["count"] == 1

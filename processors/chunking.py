@@ -58,7 +58,9 @@ def chunk_for_translation(text: str) -> list[str]:
 
     Every backend calls this, not :func:`chunk_text`, so a segment that had to be split
     is recorded (``limits_applied``, effect ``split``): it is translated in full, but its
-    pieces are re-joined with a line break, which is how the limit shapes the result.
+    pieces are re-joined with a line break, which is how the limit shapes the result. The
+    note counts segments, not calls: the same text sent again within a document is not
+    counted twice.
     """
     size = TRANSLATION_CHUNK_CHARS.get()
     chunks = chunk_text(text, size)
@@ -68,6 +70,7 @@ def chunk_for_translation(text: str) -> list[str]:
             "split",
             1,
             f"a segment longer than {size} characters was translated in pieces re-joined with a line break",
+            key=text,  # once per segment, however often it is sent (the re-run sends it again)
         )
     return chunks
 

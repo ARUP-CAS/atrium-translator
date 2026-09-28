@@ -193,3 +193,97 @@ def test_no_warning_for_replace_or_for_other_documents(tmp_path, fresh_latch, ca
     with caplog.at_level(logging.WARNING, logger="utils"):
         _run(tmp_path, document, xpath, mode)
     assert "AMCR 2.2 schema" not in caplog.text
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The verdict is returned, summarised once per run and kept in the paradata
+# ──────────────────────────────────────────────────────────────────────────────
+
+_AMCR_SCHEMA = """<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:amcr="https://api.aiscr.cz/schema/amcr/2.2/"
+           targetNamespace="https://api.aiscr.cz/schema/amcr/2.2/" elementFormDefault="qualified">
+  <xs:element name="amcr">
+    <xs:complexType><xs:sequence>
+      <xs:element name="nazev" type="xs:string"/>
+      {extra}
+    </xs:sequence></xs:complexType>
+  </xs:element>
+</xs:schema>
+"""
+
+
+def _amcr_schema(tmp_path, *, valid):
+    path = tmp_path / ("ok.xsd" if valid else "strict.xsd")
+    extra = "" if valid else '<xs:element name="popis" type="xs:string"/>'  # the record has no popis
+    path.write_text(_AMCR_SCHEMA.replace("{extra}", extra), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(("valid", "expected"), [(True, True), (False, False)])
+def test_process_metadata_xml_returns_the_verdict(tmp_path, valid, expected):
+    src = tmp_path / "rec.xml"
+    src.write_text(_AMCR, encoding="utf-8")
+    verdict = process_metadata_xml(
+        src,
+        tmp_path / "rec_en.xml",
+        ["//amcr:amcr/amcr:nazev"],
+        _Translator(),
+        "cs",
+        "en",
+        xsd_schema=load_xsd(str(_amcr_schema(tmp_path, valid=valid))),
+        csv_writer=csv.writer(io.StringIO()),
+    )
+    assert verdict is expected
+    assert (tmp_path / "rec_en.xml").exists()  # written either way
+
+
+def test_without_a_schema_there_is_no_verdict(tmp_path):
+    src = tmp_path / "rec.xml"
+    src.write_text(_AMCR, encoding="utf-8")
+    assert process_metadata_xml(src, tmp_path / "o.xml", ["//amcr:amcr/amcr:nazev"], _Translator(), "cs", "en") is None
+
+
+def _main_run(tmp_path, monkeypatch, *extra, valid):
+    import json
+
+    import main as main_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "C-N1000019.xml").write_text(_AMCR, encoding="utf-8")
+    (tmp_path / "fields.txt").write_text("//amcr:amcr/amcr:nazev\n", encoding="utf-8")
+    schema = _amcr_schema(tmp_path, valid=valid)
+    monkeypatch.setattr(main_module, "get_backend", lambda *a, **k: _Translator())
+    argv = ["main.py", "docs", "--xpaths", "fields.txt", "--source_lang", "cs", "--xsd", str(schema), "-o", "out"]
+    monkeypatch.setattr("sys.argv", [*argv, *extra])
+    code = main_module.main()
+    record = json.loads(next((tmp_path / "out" / "paradata").glob("*_translator.json")).read_text(encoding="utf-8"))
+    return code, record["config"].get("xsd_validation")
+
+
+def test_a_valid_run_is_summarised_and_recorded(tmp_path, monkeypatch, capsys):
+    code, verdict = _main_run(tmp_path, monkeypatch, valid=True)
+    assert code == 0
+    assert verdict == {"valid": 1, "invalid": [], "strict": False}
+    assert "XSD: 1/1 record(s) valid." in capsys.readouterr().out
+
+
+def test_an_invalid_record_is_a_warning_by_default(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("XSD_STRICT", raising=False)
+    code, verdict = _main_run(tmp_path, monkeypatch, valid=False)
+    assert code == 0
+    assert verdict == {"valid": 0, "invalid": ["C-N1000019"], "strict": False}
+    assert "XSD: 0/1 record(s) valid; invalid: C-N1000019." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("how", ["flag", "env"])
+def test_xsd_strict_makes_an_invalid_record_a_failed_document(tmp_path, monkeypatch, how):
+    from main import EXIT_FAILED
+
+    extra = ("--xsd-strict",) if how == "flag" else ()
+    if how == "env":
+        monkeypatch.setenv("XSD_STRICT", "1")
+    code, verdict = _main_run(tmp_path, monkeypatch, *extra, valid=False)
+    assert code == EXIT_FAILED
+    assert verdict["strict"] is True
+    assert (tmp_path / "out" / "C-N1000019_en.xml").exists()  # the XML is still written

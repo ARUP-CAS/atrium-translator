@@ -113,3 +113,44 @@ def test_absent_or_unparseable_content_length_is_not_fatal():
     """A missing or junk length is a hint that is absent, not a request to refuse."""
     _reject_oversized_envelope(_Req())
     _reject_oversized_envelope(_Req(**{"content-length": "not-a-number"}))
+
+
+def test_an_oversized_translate_request_is_refused_before_the_body_is_parsed(monkeypatch):
+    """The middleware answers from the declared Content-Length; the multipart form is never read.
+
+    ``Request.form`` is made to fail: were the body parsed first (as when the check lived only in
+    the handler), the request would error instead of answering 413.
+    """
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from starlette.requests import Request
+
+    from service.api import app
+
+    monkeypatch.setenv("MAX_UPLOAD_MB", "1")  # max_request_mb = 2 * 1 + 1 = 3 MB
+
+    def _parsed(*args, **kwargs):
+        raise AssertionError("the multipart body was parsed before the size check")
+
+    with patch.object(Request, "form", _parsed):
+        response = TestClient(app).post(
+            "/translate",
+            files={"file": ("big.xml", b"x" * (4 * 1024 * 1024), "application/xml")},
+            data={"is_alto": "false"},
+        )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["reason"] == "limit_exceeded"
+    assert body["limit"]["key"] == "max_request_mb"
+
+
+def test_a_request_under_the_envelope_passes_the_middleware(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from service.api import app
+
+    monkeypatch.setenv("MAX_UPLOAD_MB", "1")
+    client = TestClient(app, raise_server_exceptions=False)  # no backend is warmed here; only the gate matters
+    response = client.post("/translate", files={"file": ("s.xml", b"<a/>", "application/xml")})
+    assert response.status_code != 413

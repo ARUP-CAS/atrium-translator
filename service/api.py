@@ -16,7 +16,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from atrium_document import canonical_doc_id
 from atrium_limits import LimitExceeded, LimitNotes
@@ -39,6 +40,7 @@ try:
         attach_health,
         attach_inflight_middleware,
         build_info,
+        error_body,
         read_tool_version,
         read_upload_bounded,
         serve_lifecycle,
@@ -51,6 +53,7 @@ except ImportError:
         attach_health,
         attach_inflight_middleware,
         build_info,
+        error_body,
         read_tool_version,
         read_upload_bounded,
         serve_lifecycle,
@@ -206,6 +209,12 @@ async def lifespan(app: FastAPI):
     backend = os.getenv("TRANSLATION_BACKEND")
     logger.info("Warming up translation backend (%s)", backend or "lindat")
     models["translator"] = get_backend(backend, vocab_path=None)
+    # A backend with a model to load (ct2) loads it now: a configuration error stops the
+    # service here instead of failing the first request, and /ready below means "loaded".
+    warm = getattr(models["translator"], "warm", None)
+    if callable(warm):
+        logger.info("Loading the %s model", getattr(models["translator"], "name", backend))
+        warm()
     models["identifier"] = LanguageIdentifier()
     # Metadata-mode XPath targets, read once here rather than per request — the same
     # warm-cache treatment the backend and identifier get. Before this existed the
@@ -232,6 +241,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 attach_inflight_middleware(app, _state)
+
+
+@app.middleware("http")
+async def _refuse_oversized_translate_request(request: Request, call_next):
+    """413 on a declared Content-Length past ``max_request_mb``, BEFORE the body is read.
+
+    FastAPI parses (and Starlette spools to disk) the whole multipart form before the
+    handler runs, so the check inside ``translate_document`` alone bounds what is
+    processed, not what is received. Here it runs first. A request without a declared
+    length is still bounded per part while its parts are read (``read_upload_bounded``).
+    """
+    if request.method == "POST" and request.url.path == "/translate":
+        try:
+            _reject_oversized_envelope(request)
+        except LimitExceeded as exc:
+            body = error_body(exc.http_status, exc.detail, "limit_exceeded", limit=jsonable_encoder(exc.to_dict()))
+            return JSONResponse(body, status_code=exc.http_status)
+    return await call_next(request)
+
+
 # §4.4 error body {status, reason, detail} for every error (atrium-project#32 item 2, #53).
 attach_error_handlers(app)
 
@@ -349,7 +378,7 @@ async def translate_document(
             ),
         )
 
-    _reject_oversized_envelope(request)
+    _reject_oversized_envelope(request)  # also in the middleware above; kept for direct calls
     upload_mb = MAX_UPLOAD.get()
     content = await read_upload_bounded(file, upload_mb, "File")
 

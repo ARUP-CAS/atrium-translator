@@ -53,6 +53,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 
 from tool_limits import CT2_MAX_DECODING_TOKENS, CT2_MAX_GLOSSARY_TERMS, CT2_MAX_INPUT_TOKENS
@@ -276,6 +277,9 @@ class CT2Translator:
         self._engine = None
         self._sp = None
         self._tokenizer = None
+        # One backend object serves every request of the service, and the first requests can
+        # arrive together: without the lock each would load its own copy of the model.
+        self._load_lock = threading.RLock()
 
     # ── TranslationBackend Protocol ───────────────────────────────────────────
     def translate(self, text: str, src_lang: str, tgt_lang: str = "en") -> str:
@@ -337,9 +341,31 @@ class CT2Translator:
         return comps
 
     # ── lazy model loading ────────────────────────────────────────────────────
+    def warm(self) -> None:
+        """Load the model — and EuroLLM's tokenizer — now instead of on the first request.
+
+        The service calls it at startup (``service/api.py`` lifespan), so a configuration
+        error stops the service and ``/ready`` means the model is loaded.
+        """
+        self._ensure_loaded()
+        if self.family not in _NMT_FAMILIES:
+            self._get_tokenizer()
+
     def _ensure_loaded(self) -> None:
         if self._engine is not None:
             return
+        with self._load_lock:
+            if self._engine is None:  # another thread may have loaded it meanwhile
+                self._load_engine()
+
+    def _get_tokenizer(self):
+        if self._tokenizer is None:
+            with self._load_lock:
+                if self._tokenizer is None:
+                    self._tokenizer = self._load_tokenizer()
+        return self._tokenizer
+
+    def _load_engine(self) -> None:
         if not self.model_dir:
             raise TranslationError(
                 "CT2Translator is not configured: set CT2_MODEL_DIR to a converted "
@@ -358,7 +384,7 @@ class CT2Translator:
         self._check_compute_type(ctranslate2)
         engine_cls = ctranslate2.Translator if self.family in _NMT_FAMILIES else ctranslate2.Generator
         try:
-            self._engine = engine_cls(self.model_dir, device=self.device, compute_type=self.compute_type)
+            engine = engine_cls(self.model_dir, device=self.device, compute_type=self.compute_type)
         except ValueError as e:
             # CTranslate2 reports a bad device or compute type as a bare
             # ValueError; surface it as the backend's own failure type.
@@ -367,6 +393,8 @@ class CT2Translator:
             ) from e
         if self.family in _NMT_FAMILIES:
             self._sp = self._load_sp()
+        # Published last: a thread that sees the engine also sees what it needs.
+        self._engine = engine
 
     def _check_compute_type(self, ctranslate2) -> None:
         """Refuse a compute type *device* cannot run, naming the ones it can.
@@ -498,8 +526,7 @@ class CT2Translator:
         the untranslated source, the chunk is asked for once more without the glossary:
         an ordinary translation is better than keeping the Czech.
         """
-        if self._tokenizer is None:
-            self._tokenizer = self._load_tokenizer()
+        self._get_tokenizer()
 
         glossary = self._glossary_lines(text)
         translated = self._generate_llm(text, src_lang, tgt_lang, glossary)

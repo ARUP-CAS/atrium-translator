@@ -1,7 +1,7 @@
 # 📓 atrium-translator — agent_dev_logs/DEVLOG.md (timeline index)
 > _XML in-place translation. 2 open issues (#4, #46). AMČR baseline (atrium-project#67, 2026-09-26): #4 finish ·
-> #46 close after AMČR's production run. `test` HEAD `160f4a4` (2026-09-27) · **v1.2.1-beta** (2026-09-26, the
-> production-readiness fixes) · **v1.2.2-beta prepared** (2026-09-28, not tagged). Twelve-factor detail lives in the hub:
+> #46 close after AMČR's production run. `test` HEAD `d8d72b5` (2026-09-28, the v1.2.2-beta tag) · **v1.2.1-beta** (2026-09-26, the
+> production-readiness fixes) · **v1.2.2-beta** (2026-09-28, `d8d72b5`). Twelve-factor detail lives in the hub:
 > `ufal/atrium-project/agent_dev_logs/{digests,plans}/53.*` — the `digests/12factor.*` / `plans/12factor.*` this
 > line used to cite were never written._
 > _Per-issue detail: `digests/{4,46}.digest.md` · `plans/{4,46}.plan.md` · `issues/` exports (source of truth). Cross-repo/hub
@@ -326,6 +326,12 @@ cell-merging stub: only page 76 changes, every number on its own row.
   `paradata/`.
 - **Version:** `para_config.txt` / `CITATION.cff` → v1.2.2-beta (`check_version.py --tag v1.2.2-beta` passes).
 - **Not pushed: files delivered in chat.**
+- **v1.2.2-beta tagged** (`d8d72b5`, K4TEL): the files above plus a LINDAT refresh of the AMCR replace samples in the
+  production shape (`--source_lang cs`, `--xsd` AMCR 2.2; run `260928-110452`, 15/15, all `ok`). Verified green.
+- **After the tag (on `test`):** `data_samples/README.md` describes that LINDAT run (it still described the `ct2` one)
+  and the stale `ct2` record left `paradata/`; `--xsd` verdicts recorded (`xsd_validation`, a summary line,
+  `--xsd-strict` / `XSD_STRICT`); `/translate` refuses a declared over-size request before the body is parsed; the
+  `split` note counts segments; the service loads a `ct2` model at startup under a load lock. Files delivered in chat.
 
 ---
 
