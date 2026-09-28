@@ -862,25 +862,21 @@ def process_metadata_xml(
         # schema (`{source_lang, target_lang, backend}`) — NOT the translated
         # corpus text itself, which already persists via `derived_from.translated_xml`.
         #
-        # Entity translation (`entities[].translation_en`) is NOT attempted here, and as of
-        # today no code path in this repo writes that field at all — it is UNIMPLEMENTED,
-        # not merely deferred (atrium-project#10, finding D7).
+        # Entity translation (`entities[].translation_en`) is RESERVED: declared for this
+        # repo (hub `docs/document_schema.md`, `BLOCK_FIELD_OWNERS["entities"]["translator"]`
+        # in atrium_document.py, `doc-schema-v1`) and written by no code path, on purpose until
+        # after the AMČR pilot — tracked in atrium-project#70 (was D7 of atrium-project#10).
         #
-        # Why it is absent here: in the declared pipeline order (pc→alto→translate→nlp→llm),
-        # `entities[]` is produced by nlp-enrich, which runs AFTER the translator. `entities`
-        # does not exist yet at this point in any real run, so a per-entity translation pass
-        # in this function would be unreachable dead code (issue #13 alignment audit, P0.6).
-        #
-        # This repo is nonetheless the field's declared OWNER — see the ownership table in the
-        # hub's `docs/document_schema.md` and `BLOCK_FIELD_OWNERS["entities"]["translator"]` in
-        # atrium_document.py — so the gap is ours to close, not another tool's. Resolving it
-        # needs a SECOND pass over an already-enriched record: read `entities` via
-        # `doc.get_block("entities")`, translate each `surface`, and `merge_block("entities",
-        # rows, own_fields=["translation_en"])` back (followed by
-        # `assert_fields_survived("entities", rows, ["translation_en"])`, so a grant mistake
-        # cannot silently drop the field). That is a feature, tracked as still-open; the
-        # earlier citation here pointed at `agent_dev_logs/digests/13.digest.md`, which does
-        # not exist in this repo.
+        # It cannot be written here: in the pipeline order (pc→alto→translate→nlp→llm),
+        # `entities[]` is produced by nlp-enrich, AFTER the translator, so it does not exist
+        # yet in any real run and a per-entity pass in this function would be dead code
+        # (issue #13 alignment audit, P0.6). #70 decides between three options:
+        #   1. a second translator pass over an enriched record — read `doc.get_block("entities")`,
+        #      translate each `surface`, `merge_block("entities", rows, own_fields=["translation_en"])`,
+        #      then `assert_fields_survived("entities", rows, ["translation_en"])`;
+        #   2. reassigning the field to nlp-enrich or llm-enrich (a shared-module round);
+        #   3. keeping it reserved and unwritten (the field stays: removing it would break the
+        #      frozen schema).
         if output_mode == OUTPUT_MODE_APPEND:
             logger.info(
                 "%s: append mode wrote %d translated sibling(s); %d field(s) already carried one.",
@@ -1775,8 +1771,8 @@ def process_alto_xml(
 
         # ATRIUM Document JSON accretion update for ALTO blocks. See the metadata-path
         # twin above for why `translations` carries language-pair metadata (not the
-        # translated corpus text), and for the state of `entities[].translation_en` — a
-        # field this repo owns and no code path here writes (D7, still open).
+        # translated corpus text), and for `entities[].translation_en` — reserved for this
+        # repo and written by no code path until atrium-project#70 decides.
         if doc is not None:
             doc.set_block(
                 "translations",

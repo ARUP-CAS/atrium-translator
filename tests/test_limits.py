@@ -196,6 +196,64 @@ def test_the_lindat_timeout_and_retries_are_settings(monkeypatch):
     assert post.call_args.kwargs["timeout"] == 7.5
 
 
+def test_lindat_max_retries_bounds_the_attempts(monkeypatch):
+    from processors.translator import TranslationError
+
+    monkeypatch.setenv("LINDAT_MAX_RETRIES", "0")
+    backend = _lindat()
+    failing = MagicMock(status_code=503, text="")
+    with patch("processors.translator.requests.post", return_value=failing) as post:
+        with pytest.raises(TranslationError):
+            backend.translate("Hrad.", "cs", "en")
+    assert post.call_count == 1  # 0 retries: the first attempt only
+
+    monkeypatch.setenv("LINDAT_MAX_RETRIES", "2")
+    with patch("processors.translator.requests.post", return_value=failing) as post:
+        with pytest.raises(TranslationError):
+            backend.translate("Hrad.", "cs", "en")
+    assert post.call_count == 3
+
+
+def test_a_split_field_reaches_the_response_header_through_the_real_pipeline(monkeypatch, tmp_path):
+    """The real process_single_file, LindatTranslator and paradata logger, only requests.post patched:
+    the note a split field records has to travel collecting() -> paradata -> X-Atrium-Limits-Applied.
+    (Every other service test writes its notes into the logger itself, so removing that link stayed green.)"""
+    import re
+    from pathlib import Path
+
+    import service.api as api
+    from processors.translator import LindatTranslator
+    from service.api import _load_xpaths
+
+    monkeypatch.setenv("TRANSLATION_CHUNK_CHARS", "100")
+    with patch("processors.translator.requests.get", side_effect=OSError("offline")):
+        translator = LindatTranslator(vocab_path=None)
+    models = {"translator": translator, "identifier": None, "xpaths_list": _load_xpaths("amcr-fields.txt")}
+    source = Path("data_samples/my_documents/C-TX-195304352.xml").read_text(encoding="utf-8")
+    long_popis = "\n".join(["Hrad stojí na kopci nad řekou."] * 12)
+    body = re.sub(
+        r"(<amcr:popis[^>]*>)(.*?)(</amcr:popis>)",
+        lambda m: m.group(1) + long_popis + m.group(3),
+        source,
+        count=1,
+        flags=re.S,
+    )
+
+    def reply(url, data, timeout):
+        return _lindat_reply(
+            "\n".join("A castle stands on a hill above the river." for _ in data["input_text"].split("\n"))
+        )
+
+    with patch.object(api, "models", models), patch("processors.translator.requests.post", side_effect=reply):
+        response = TestClient(api.app).post(
+            "/translate",
+            files={"file": ("record.xml", body.encode(), "application/xml")},
+            data={"is_alto": "false", "source_lang": "cs", "output_mode": "replace"},
+        )
+    assert response.status_code == 200, response.content[:300]
+    assert "translation_chunk_chars=split:" in response.headers["x-atrium-limits-applied"]
+
+
 def test_a_lindat_segment_split_into_chunks_is_recorded(monkeypatch):
     monkeypatch.setenv("TRANSLATION_CHUNK_CHARS", "100")
     backend = _lindat()

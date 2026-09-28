@@ -5,6 +5,7 @@ main.py – Entry point for the ATRIUM LINDAT Translation Wrapper.
 import argparse
 import configparser
 import csv
+import logging
 import os
 import sys
 from pathlib import Path
@@ -91,6 +92,11 @@ def _build_paradata_config(args, config: configparser.ConfigParser) -> dict:
         from processors.translator import resolve_translation_url
 
         cfg["translation_api"] = resolve_translation_url().rstrip("/") + "/"
+    elif backend_name == "ct2":
+        # Which model, device and quantisation translated: the same CT2_* the backend reads.
+        from processors.ct2_translator import CT2Translator
+
+        cfg.update(CT2Translator().describe())
 
     # The language-identification policy actually in force (processors/language.py),
     # not the literal 0.2 this used to record — which the ALTO path never applied.
@@ -377,6 +383,8 @@ def parse_arguments():
     args = parser.parse_args()
     config = _read_config(args.config)
     defaults = config["DEFAULT"] if "DEFAULT" in config else {}
+    # Asked for on the command line, before config.txt fills the gaps (see `formats` below).
+    xpaths_on_cli = args.xpaths is not None
 
     if args.input_path is None and "input_path" in defaults:
         args.input_path = Path(defaults["input_path"])
@@ -393,6 +401,16 @@ def parse_arguments():
         args.target_lang = defaults.get("target_lang", "en")
     if args.formats is None:
         args.formats = defaults.get("formats", "xml")
+        # The shipped config.txt says `formats = alto.xml` (the ALTO sample), which turns
+        # ALTO mode on below. A command line that names --xpaths asks for a metadata run:
+        # left alone, it would scan for *.alto.xml, find none and exit 2, or translate only
+        # the ALTO file of a mixed directory (issue #46). --formats / --alto still decide.
+        if xpaths_on_cli and not args.alto and "alto.xml" in args.formats.lower():
+            print(
+                f"[INFO] --xpaths given: metadata mode with formats 'xml,txt' "
+                f"(config.txt formats = {args.formats!r} is the ALTO setting; pass --formats to choose)."
+            )
+            args.formats = "xml,txt"
     if args.backend is None:
         args.backend = defaults.get("translation_backend") or os.environ.get("TRANSLATION_BACKEND") or "lindat"
     if args.xpaths is None and "fields" in defaults:
@@ -870,4 +888,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # The batch CLI's handler, as service/api.py configures the service's: without
+    # one, the INFO records of utils.process_metadata_xml — the per-file XSD verdict and the
+    # "saved" line — are dropped, and LOG_LEVEL does nothing (factor XI, atrium-project#61).
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        stream=sys.stdout,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",  # the services' shape (issue #61)
+    )
     sys.exit(main())

@@ -17,3 +17,6 @@ sentencepiece>=0.2.2
 # generation. Keep this on the current Transformers 5.x line: the repository's
 # huggingface-hub runtime pin is compatible with Transformers 5.x.
 transformers>=5.15,<6
+# apply_chat_template() renders EuroLLM's chat template with Jinja2, which transformers
+# only lists as an optional extra: without it every eurollm chunk fails.
+jinja2>=3.1

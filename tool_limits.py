@@ -53,6 +53,10 @@ LINDAT_GUARD_RETRIES = limit("LINDAT_GUARD_RETRIES", 2, unit="retries")
 #: still degenerate after them keeps its source text → ``skipped`` note.
 TRANSLATION_RERUN_ROUNDS = limit("TRANSLATION_RERUN_ROUNDS", 1, unit="rounds")
 
+#: Per-request timeout of one UDPipe call — the lemma matching of Tag-and-Protect (LINDAT
+#: backend with a vocabulary). A chunk whose request times out is not lemmatised, so its
+#: vocabulary terms are translated unprotected → ``skipped`` note.
+UDPIPE_TIMEOUT_S = limit("UDPIPE_TIMEOUT_S", 30, unit="s", kind=float, minimum=1)
 #: Per-request timeout of one LLM call (``TRANSLATION_BACKEND=openai_compatible``).
 LLM_TIMEOUT_S = limit("LLM_TIMEOUT_S", 120, unit="s", kind=float, minimum=1)
 
@@ -88,6 +92,7 @@ LIMITS = LimitSet(
     LINDAT_MAX_RETRIES,
     LINDAT_GUARD_RETRIES,
     TRANSLATION_RERUN_ROUNDS,
+    UDPIPE_TIMEOUT_S,
     LLM_TIMEOUT_S,
     LLM_MAX_TOKENS,
     LLM_MAX_RETRIES,

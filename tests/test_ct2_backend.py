@@ -58,6 +58,30 @@ def test_license_components_permissive_stack():
     assert eurollm.license_components(True) == ["ctranslate2", "eurollm", "amcr_vocab", "teater_data"]
     madlad = CT2Translator(model_dir="/x", family="madlad")
     assert madlad.license_components(False) == ["ctranslate2", "madlad400"]
+    # An NMT family has no glossary: a loaded vocabulary is never used, so it is not recorded.
+    assert madlad.license_components(True) == ["ctranslate2", "madlad400"]
+
+
+def _resolve(components):
+    declared = {c["name"]: c["license"] for c in _load_para_config(str(REPO_ROOT))["components"]}
+    return resolve_effective_license([(c, declared[c]) for c in components])
+
+
+def test_the_amcr_and_teater_vocabularies_are_cc0():
+    """(atrium-project#6, AMCR 2026-09-28) the heslo set and TEATER are CC0: a glossary keeps
+    a EuroLLM run permissive, and a LINDAT run is CC BY-NC-SA because of LINDAT/UDPipe alone."""
+    declared = {c["name"]: c["license"] for c in _load_para_config(str(REPO_ROOT))["components"]}
+    assert declared["amcr_vocab"] == declared["teater_data"] == "CC0"
+
+    eurollm = _resolve(CT2Translator(model_dir="/x", family="eurollm").license_components(True))
+    assert eurollm["is_non_commercial"] is False
+    assert eurollm["unknown_licenses"] == []
+
+    from processors.translator import LindatTranslator
+
+    lindat = _resolve(LindatTranslator.license_components(object(), True))
+    assert lindat["effective_license"] == "CC BY-NC-SA 4.0"
+    assert "amcr_vocab" not in lindat["determined_by"]
 
 
 def test_supported_languages_from_kwarg_and_env(monkeypatch):

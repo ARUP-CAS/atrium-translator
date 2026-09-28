@@ -455,6 +455,12 @@ async def translate_document(
             if not isinstance(effective_url, str) or not effective_url.strip():
                 effective_url = resolve_translation_url()
             para_config["translation_api"] = effective_url.rstrip("/") + "/"
+        elif backend_name == "ct2":
+            # Which model, device and quantisation the warmed backend uses (CT2_*).
+            describe = getattr(models["translator"], "describe", None)
+            details = describe() if callable(describe) else None
+            if isinstance(details, dict):
+                para_config.update(details)
 
         with ParadataLogger(
             program="translator-api",

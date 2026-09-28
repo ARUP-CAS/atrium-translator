@@ -155,14 +155,29 @@ hr, sl, lv, lt, et, hu, ro, es, it, nl, hi.  Of the candidates:
   permissive.  EuroLLM-9B-Instruct is gated on Hugging Face (accept the terms
   before download).
 - **Deployment:** The `ct2` backend's default family (`CT2_MODEL_FAMILY=eurollm`):
-  converted to CTranslate2 and run as a `Generator` with a translation prompt.
-  1.7B is CPU-viable at int8; 9B wants a GPU.
-- **Terminology:** No glossary API, but instructable: the `ct2` backend injects
-  matching vocabulary pairs into the prompt (`supports_glossary = True`), so
-  Tag-and-Protect and UDPipe are not needed.
+  converted to CTranslate2 (`ct2-transformers-converter --quantization int8`) and
+  run as a `Generator` with the checkpoint's own Hugging Face tokenizer and chat
+  template (`CT2_TOKENIZER_DIR`; unset, `CT2_MODEL_DIR` when converted with
+  `--copy_files tokenizer_config.json tokenizer.model special_tokens_map.json`,
+  else the folder of `CT2_SP_MODEL`); `requirements-ct2.txt` brings Transformers
+  and Jinja2 for the template. Generation stops at the tokenizer's EOS and at the chat
+  markers (`<|im_end|>`, `<|im_start|>`) it knows. 1.7B is CPU-viable at int8;
+  9B wants a GPU.
+- **Prompt:** the user turn is EuroLLM-Instruct's documented translation format,
+  languages in words (`Translate the following Czech source text to
+  English:\nCzech: … \nEnglish: `); the instructions sit in the system turn.
+- **Terminology:** No glossary API, but instructable: the `ct2` backend puts the
+  matching vocabulary pairs in the system turn (`supports_glossary = True`), so
+  Tag-and-Protect and UDPipe are not needed. A glossary the model writes back
+  (`Use these exact terms: bod = point …`, `term = term` lines, the prompt's
+  `Czech:` / `English:` labels) is cut from the start and end of the reply; a
+  reply that was only the glossary, or the untranslated source, is requested once
+  more without the glossary. In the first AMCR run (2026-09-27, glossary still in
+  the user turn) EuroLLM-1.7B wrote the glossary into 13 of 30 fields.
 - **Quality:** Not yet measured on this corpus; it is one of the three backends
   in the planned `eval/bakeoff.py` run (`lindat,openai_compatible,ct2`).
-  Generative, so the output-length guards (`CT2_GUARD_*`) apply.
+  Generative, so the output-length guards (`CT2_GUARD_*`) apply, plus a check that
+  rejects the source copied back unchanged.
 - **References:**
   - [HuggingFace: utter-project/EuroLLM-1.7B-Instruct](https://huggingface.co/utter-project/EuroLLM-1.7B-Instruct)
   - [HuggingFace: utter-project/EuroLLM-9B-Instruct](https://huggingface.co/utter-project/EuroLLM-9B-Instruct)
@@ -247,6 +262,10 @@ How each backend changes the effective output license via `para_licenses.py`:
 | NLLB-200                            | CC BY-NC 4.0       | CC BY-NC 4.0                   | CC BY-NC-SA 4.0             |
 | Opus-MT                             | CC BY 4.0 †        | CC BY 4.0                      | CC BY-NC-SA 4.0             |
 | DeepL API                           | Proprietary (paid) | Per agreement                  | Per agreement + CC BY-NC-SA |
+
+The AMCR/TEATER vocabulary (`amcr_vocab`, `teater_data`) is **CC0** (rights holder AMČR, atrium-project#6,
+2026-09-28), so a glossary never changes the result: a `ct2` EuroLLM run with `--vocabulary` and an explicit
+`--source_lang` resolves to MIT (the engine; the model is Apache-2.0). FastText (`--source_lang auto`) is CC BY-NC 4.0.
 
 † Recorded conservatively: `opus-mt-tc-big-*` checkpoints are CC BY 4.0, older ones
 Apache-2.0 (same rank). The `ct2` backend logs `nllb200` / `opus_mt` /

@@ -52,11 +52,17 @@ instance instead of LINDAT's public one.  The variable name is shared with
 ``atrium-nlp-enrich``, which calls the same service from its own pipeline.
 """
 
+import logging
 import os
 
 import requests
 
+from tool_limits import UDPIPE_TIMEOUT_S
+
 from .chunking import chunk_text
+from .limit_notes import note
+
+logger = logging.getLogger(__name__)
 
 #: LINDAT's public UDPipe 2 endpoint — the default, not a hard requirement.
 DEFAULT_UDPIPE_URL = "https://lindat.mff.cuni.cz/services/udpipe/api/process"
@@ -182,18 +188,32 @@ class LindatLemmatizer:
                         "tagger": "",
                         "data": chunk,
                     },
-                    timeout=30,
+                    timeout=UDPIPE_TIMEOUT_S.get(),
                 )
                 if resp.status_code != 200:
-                    print(f"[WARN] UDPipe returned HTTP {resp.status_code}; skipping lemmatisation for chunk.")
+                    logger.warning(
+                        "UDPipe returned HTTP %s; this chunk is not lemmatised and its vocabulary terms are "
+                        "not protected.",
+                        resp.status_code,
+                    )
                     continue
 
                 yield resp.json().get("result", "")
 
             except requests.exceptions.Timeout:
-                print("[WARN] UDPipe request timed out; skipping lemmatisation for chunk.")
+                # A limit that changed the result without refusing it (atrium-project#53).
+                note(
+                    UDPIPE_TIMEOUT_S,
+                    "skipped",
+                    1,
+                    "a UDPipe request timed out: that chunk's vocabulary terms were translated unprotected",
+                )
+                logger.warning(
+                    "UDPipe request timed out after %ss; this chunk's vocabulary terms are not protected.",
+                    UDPIPE_TIMEOUT_S.get(),
+                )
             except Exception as e:
-                print(f"[WARN] Lemmatisation failed: {e}")
+                logger.warning("Lemmatisation failed (%s); this chunk's vocabulary terms are not protected.", e)
 
     @staticmethod
     def _parse_conllu(conllu: str) -> list[tuple[str, str]]:

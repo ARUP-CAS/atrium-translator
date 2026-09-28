@@ -9,15 +9,19 @@ target_lang = en
 # not confident enough (under LANG_ID_MIN_CONFIDENCE), or it names a language the
 # translation backend cannot translate (e.g. 'yue', 'krc' on short Czech OCR
 # fragments) — and neither the element's own label (ALTO LANG / xml:lang) nor the
-# language detected for the whole document settles it. Overridden by
-# --default-source-lang on the CLI and by the DEFAULT_SOURCE_LANG env var.
+# language detected for the whole document settles it. --default-source-lang on the
+# CLI overrides this key; the DEFAULT_SOURCE_LANG env var applies only when this key is
+# absent (comment it out to let the environment set it).
 # Tip: on a single-language corpus, set source_lang = cs instead — no detection
 # runs at all, and the CC BY-NC FastText model is not loaded.
 default_source_lang = cs
 
-# Use "xml,txt"  (default) to process both AMCR .xml files and URL-list .txt files.
+# Use "xml,txt"  to process both AMCR .xml files and URL-list .txt files (the value
+#                 without this key; a command line with --xpaths also gets it).
 # Use "alto.xml,txt" when the input directory contains ALTO XML files and URL lists.
-# Use "alto.xml"  when the input directory contains only ALTO XML files.
+# Use "alto.xml"  when the input directory contains only ALTO XML files — the value
+#                 shipped here; it switches ALTO mode on unless --xpaths or --formats
+#                 is given on the command line.
 formats = alto.xml
 
 # Shipped samples are laid out as <mode>/<alto|xml>: in-place_translated_files/ holds
@@ -43,7 +47,8 @@ vocabulary = data_samples/vocabulary.csv
 #   ct2                -> self-hosted CTranslate2 model (EuroLLM / MADLAD-400 /
 #                         NLLB-200 / Opus-MT). Needs requirements-ct2.txt and the
 #                         CT2_* environment variables (CT2_MODEL_DIR at least).
-# Overridden by --backend on the CLI and by the TRANSLATION_BACKEND env var.
+# --backend on the CLI overrides this key; the TRANSLATION_BACKEND env var applies
+# only when this key is absent.
 translation_backend = lindat
 
 # Output mode (issue #46) — how the translation is written into the document.
@@ -56,9 +61,11 @@ translation_backend = lindat
 #              double-translation, because the marker makes the pair detectable.
 #              ALTO keeps every String's CONTENT (and geometry) and adds the
 #              translation as <ALTERNATIVE PURPOSE="translation:<lang>">.
-# Overridden by --output-mode on the CLI and by the OUTPUT_MODE env var.
-# Run append with --xsd the first time against real AMCR data: whether the schema
-# permits the repeated element (maxOccurs) is still open, and the validator settles it.
+# --output-mode on the CLI overrides this key; the OUTPUT_MODE env var applies only
+# when this key is absent.
+# AMCR 2.2 accepts replace output and rejects append output (xml:lang is not declared
+# on the free-text fields and they cannot repeat; checked with --xsd, issue #46): where
+# an AMCR record must validate, use replace. ALTO append validates against ALTO 3.1.
 output_mode = replace
 
 # Backing service endpoints (atrium-project#63). Both are attachable: point them

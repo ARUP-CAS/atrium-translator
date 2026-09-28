@@ -200,12 +200,25 @@ class TestCLIParadata:
         cfg = main._build_paradata_config(_cli_args("openai_compatible"), configparser.ConfigParser())
         assert "translation_api" not in cfg
 
+    def test_a_ct2_run_names_its_model(self, monkeypatch):
+        import main
+
+        monkeypatch.setenv("CT2_MODEL_DIR", "/lnet/models/ct2/eurollm-1.7b-int8")
+        monkeypatch.setenv("CT2_MODEL_FAMILY", "eurollm")
+        monkeypatch.setenv("CT2_COMPUTE_TYPE", "int8")
+        cfg = main._build_paradata_config(_cli_args("ct2"), configparser.ConfigParser())
+        assert cfg["ct2_model"] == "eurollm-1.7b-int8"
+        assert cfg["ct2_model_family"] == "eurollm"
+        assert cfg["ct2_compute_type"] == "int8"
+        assert cfg["ct2_device"] == "cpu"
+        assert "translation_api" not in cfg
+
 
 class TestServiceParadata:
     """The regression the issue calls out, and which nothing covered before."""
 
     @staticmethod
-    def _post_and_capture(monkeypatch, backend_name, base_url):
+    def _post_and_capture(monkeypatch, backend_name, base_url, translator=None):
         from fastapi.testclient import TestClient
 
         import service.api as api
@@ -234,11 +247,13 @@ class TestServiceParadata:
             #: echoes it to the caller after the run.
             limits_applied = []
 
-        translator = MagicMock()
-        translator.name = backend_name
-        translator.vocabulary = {}
-        translator.license_components.return_value = ["lindat_cubbitt"]
-        translator.base_url = base_url
+        if translator is None:
+            translator = MagicMock()
+            translator.name = backend_name
+            translator.vocabulary = {}
+            translator.license_components.return_value = ["lindat_cubbitt"]
+            translator.base_url = base_url
+            translator.describe.return_value = None  # a double: no model to name
 
         with (
             patch("service.api.process_single_file", side_effect=_fake_process),
@@ -264,3 +279,16 @@ class TestServiceParadata:
     def test_non_lindat_backends_claim_no_lindat_endpoint(self, monkeypatch):
         captured = self._post_and_capture(monkeypatch, "openai_compatible", None)
         assert "translation_api" not in captured
+
+    def test_a_ct2_backend_names_its_model(self, monkeypatch):
+        from processors.ct2_translator import CT2Translator
+
+        translator = CT2Translator(model_dir="/models/ct2/eurollm-1.7b-int8", family="eurollm", compute_type="int8")
+        captured = self._post_and_capture(monkeypatch, "ct2", None, translator=translator)
+        assert captured["ct2_model"] == "eurollm-1.7b-int8"
+        assert captured["ct2_model_family"] == "eurollm"
+        assert captured["ct2_compute_type"] == "int8"
+
+    def test_a_backend_double_without_describe_records_nothing_extra(self, monkeypatch):
+        captured = self._post_and_capture(monkeypatch, "ct2", None)
+        assert not any(key.startswith("ct2_") for key in captured)

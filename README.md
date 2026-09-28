@@ -224,6 +224,13 @@ mkdir -p data/input data/output && sudo chown -R 10001 data
 docker run --rm -v "$PWD/data:/data" \
   ghcr.io/ufal/atrium-translator:latest \
   /data/input --alto --formats alto.xml --target_lang en -o /data/output
+
+# AMCR metadata records (./data/input holds the *.xml records), the issue #46 production shape:
+# replace mode, validated against AMCR 2.2. --xsd exists only in this batch image, not in /translate.
+docker run --rm -v "$PWD/data:/data" \
+  ghcr.io/ufal/atrium-translator:latest \
+  /data/input --xpaths amcr-fields.txt --formats xml --source_lang cs --target_lang en \
+  --output-mode replace --xsd https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd -o /data/output
 ```
 
 > ⚠️ **Create `./data` yourself first.** The container runs as uid 10001, and a
@@ -275,6 +282,9 @@ atrium-translator/
 ├── atrium_rocrate.py          # 📦 RO-Crate (JSON-LD) export of document records
 ├── para_licenses.py           # ⚖️ Effective-license resolution from exercised components
 ├── check_version.py           # 🚦 Release gate: tag == CITATION.cff == para_config.txt
+├── atrium_limits.py           # 📏 Limits contract: declaration, parsing, /info report (atrium-project#53)
+│
+├── tool_limits.py             # 📏 This tool's limits (TRANSLATION_CHUNK_CHARS, LINDAT_*, LLM_*, CT2_*)
 │
 ├── processors/                # (namespace package — no __init__.py)
 │   ├── backend.py             # 🔌 TranslationBackend protocol + get_backend() registry
@@ -287,6 +297,7 @@ atrium-translator/
 │   ├── chunking.py            # ✂️ Shared sentence-aware text chunker (priority-ordered)
 │   ├── http_retry.py          # 🔁 Shared throttle + bounded exponential back-off
 │   ├── quality.py             # 🛡️ Degenerate-output detector (loops, empty, runaway, truncation)
+│   ├── limit_notes.py         # 📝 Collects the `limits_applied` notes of a run / request
 │   └── vocab.py               # 📘 Vocabulary CSV loader
 ├── service/                   # 🌐 The HTTP surface — see service/README.md
 │   ├── api.py                 # FastAPI app: /translate, /info, /health, /ready
@@ -346,10 +357,17 @@ but is not tied to that schema; it works with any XML and any namespace.
 #### AMCR example
 
 ```bash
-python main.py amcr-inputs.txt --xpaths amcr-fields.txt \
+python main.py amcr-inputs.txt --xpaths amcr-fields.txt --formats xml,txt \
+    --source_lang cs --output-mode replace \
     --xsd https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd \
     --target_lang en
 ```
+
+> The shipped [config.txt](config.txt) sets `formats = alto.xml` (the ALTO sample), and that value turns ALTO mode
+> on. From v1.2.2-beta a command line with `--xpaths` and no `--formats` is a metadata run (`xml,txt`); **with
+> v1.2.1-beta and earlier, pass `--formats xml` (or `xml,txt` for a URL list) yourself** — without it the run finds
+> no input and exits `2`, or translates only the ALTO file of a mixed folder. `--source_lang cs` skips language
+> detection (and the CC BY-NC FastText model) on a Czech-only corpus.
 
 [amcr-fields.txt](amcr-fields.txt)📎 contains XPaths such as:
 
@@ -565,7 +583,7 @@ vocabulary = data_samples/vocabulary.csv
 element's label nor the document's language settles it. Resolution order: this flag → `default_source_lang` in
 `config.txt` → `DEFAULT_SOURCE_LANG` → `cs`.
 * `--target_lang`, `-tgt`: Target language code (e.g., `en`, `cs`). Default: `en`.
-* `--formats`: Comma-separated list of file extensions to process (e.g., `alto.xml,txt` or `xml,txt`). Default: `xml`.
+* `--formats`: Comma-separated list of file extensions to process (e.g., `alto.xml,txt` or `xml,txt`). Default: `formats` in config.txt — the shipped file says `alto.xml`, which turns ALTO mode on — except that a command line with `--xpaths` gets `xml,txt`; `xml` without a config value.
 * `--config`, `-c`: Path to the configuration file (default: `config.txt`).
 * `--alto`: Flag to enable ALTO XML in-place translation mode (auto-enabled when `formats` contains `alto.xml`).
 * `--xpaths`: Path to a `.txt` file containing XPaths for XML metadata translation (works with any XML schema).
@@ -660,8 +678,12 @@ carrying an untranslated document.
 ```bash
 curl -s -X POST localhost:8000/translate \
      -F "file=@C-N1000019.xml" -F "is_alto=false" \
-     -F "source_lang=cs" -F "output_mode=append"
+     -F "source_lang=cs" -F "output_mode=replace"
 ```
+
+`output_mode=append` works the same way, but its AMCR output does not validate against AMCR 2.2 (see above).
+The service does not validate against an XSD — run the batch image with `--xsd` for that — and it does not
+apply a `--vocabulary` (Tag-and-Protect) either: the CLI does, when one is given or named in config.txt.
 
 `is_alto`, `source_lang`, `target_lang` and `output_mode` are accepted **either** as multipart form
 fields or as query-string parameters.
@@ -976,27 +998,28 @@ record re-derives the end-to-end license from the union of all components used.
 
 ### Fields of the paradata JSON
 
-| Key                                 | Description                                                                                                 |
-|-------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| `schema_version`                    | Paradata schema version (currently `"2.0"`)                                                                 |
-| `program`                           | Always `"translator"`                                                                                       |
-| `tool_version`                      | Tool version tag, from `para_config.txt` (e.g. `v1.2.0-beta`)                                               |
-| `repository`                        | Runner repository; resolved dynamically (`ATRIUM_RUNNER_REPO` env if set)                                   |
-| `runner_ref`                        | Git ref/SHA the running container was built from (`ATRIUM_RUNNER_REF`)                                      |
-| `docker_image`                      | Running container image (`ATRIUM_RUNNER_IMAGE`); empty placeholder if unset                                 |
-| `run_id`                            | Timestamp-based unique run identifier                                                                       |
-| `license`                           | Effective output license, **computed** from the components actually used                                    |
-| `license_url`                       | Canonical URL for the effective license                                                                     |
-| `license_detail`                    | Resolution breakdown: per-component licenses, `is_non_commercial`, `is_share_alike`, `determined_by`, notes |
-| `start_time` / `end_time`           | ISO 8601 UTC timestamps                                                                                     |
-| `duration_seconds`                  | Wall-clock runtime                                                                                          |
-| `config`                            | Snapshot of all CLI / config-file parameters used (incl. `vocabulary_protected_terms` when a vocab is used) |
-| `statistics.input_files_total`      | Number of input files submitted                                                                             |
-| `statistics.successfully_processed` | Number of files that produced output                                                                        |
-| `statistics.skipped_files`          | Number of files skipped due to errors                                                                       |
-| `statistics.output_counts_by_type`  | Per-type file counts (`xml`, `csv`)                                                                         |
-| `statistics.performance_per_minute` | Files produced per minute per output type                                                                   |
-| `skipped_files_detail`              | List of `{file, reason, timestamp}` objects for every skip                                                  |
+| Key                                 | Description                                                                                                                                                                                                                   |
+|-------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `schema_version`                    | Paradata schema version (currently `"2.0"`)                                                                                                                                                                                   |
+| `program`                           | Always `"translator"`                                                                                                                                                                                                         |
+| `tool_version`                      | Tool version tag, from `para_config.txt` (e.g. `v1.2.0-beta`)                                                                                                                                                                 |
+| `repository`                        | Runner repository; resolved dynamically (`ATRIUM_RUNNER_REPO` env if set)                                                                                                                                                     |
+| `runner_ref`                        | Git ref/SHA the running container was built from (`ATRIUM_RUNNER_REF`)                                                                                                                                                        |
+| `docker_image`                      | Running container image (`ATRIUM_RUNNER_IMAGE`); empty placeholder if unset                                                                                                                                                   |
+| `run_id`                            | Timestamp-based unique run identifier                                                                                                                                                                                         |
+| `license`                           | Effective output license, **computed** from the components actually used                                                                                                                                                      |
+| `license_url`                       | Canonical URL for the effective license                                                                                                                                                                                       |
+| `license_detail`                    | Resolution breakdown: per-component licenses, `is_non_commercial`, `is_share_alike`, `determined_by`, notes                                                                                                                   |
+| `start_time` / `end_time`           | ISO 8601 UTC timestamps                                                                                                                                                                                                       |
+| `duration_seconds`                  | Wall-clock runtime                                                                                                                                                                                                            |
+| `config`                            | Snapshot of all CLI / config-file parameters used (incl. `vocabulary_protected_terms` when a vocab is used)                                                                                                                   |
+| `statistics.input_files_total`      | Number of input files submitted                                                                                                                                                                                               |
+| `statistics.successfully_processed` | Number of files that produced output                                                                                                                                                                                          |
+| `statistics.skipped_files`          | Number of files skipped due to errors                                                                                                                                                                                         |
+| `statistics.output_counts_by_type`  | Per-type file counts (`xml`, `csv`)                                                                                                                                                                                           |
+| `statistics.performance_per_minute` | Files produced per minute per output type                                                                                                                                                                                     |
+| `skipped_files_detail`              | List of `{file, reason, timestamp}` objects for every skip                                                                                                                                                                    |
+| `limits_applied`                    | Every limit that shaped a result without refusing it (`limit`, `effect`, `value`, count, detail) — e.g. a segment split at `TRANSLATION_CHUNK_CHARS`, fields kept in the source language after the re-run (atrium-project#53) |
 
 > **Note on licensing:** the license is no longer a fixed value. It is the most restrictive license
 > among the components used in the run. A run that exercises the LINDAT translation models and the
@@ -1029,8 +1052,8 @@ record re-derives the end-to-end license from the union of all components used.
       { "name": "lindat_cubbitt", "license": "CC BY-NC-SA 4.0" },
       { "name": "udpipe2_engine", "license": "MPL 2.0" },
       { "name": "udpipe2_models", "license": "CC BY-NC-SA 4.0" },
-      { "name": "amcr_vocab",     "license": "CC BY-NC 4.0" },
-      { "name": "teater_data",    "license": "CC BY-NC 4.0" }
+      { "name": "amcr_vocab",     "license": "CC0" },
+      { "name": "teater_data",    "license": "CC0" }
     ]
   },
   "duration_seconds": 138.85,
@@ -1083,6 +1106,12 @@ version **`1.0`**. That version is frozen as the hub tag
   additionally checks that every record shape the tools write validates under both the frozen and
   the current schema.
 
+What this tool writes into the record: the `translations` block (`source_lang`, `target_lang`, `backend`,
+`output_mode`, `detected_source_lang`), `derived_from.translated_xml` and the licence block.
+**`entities[].translation_en` is reserved:** the schema assigns it to the translator, but `entities[]` is written by
+nlp-enrich, which runs after the translator, so no code path here writes it until
+[atrium-project#70](https://github.com/ufal/atrium-project/issues/70) decides (after the AMČR pilot).
+
 What may change after the freeze, and what a new major version takes, is in the hub's
 [Freeze & conformance](https://github.com/ufal/atrium-project/blob/main/docs/document_schema.md#freeze--conformance).
 [CITATION.cff](CITATION.cff) 📎 carries the same reference under `references`.
@@ -1110,7 +1139,9 @@ every paradata record as `license`, `license_url` and `license_detail`.
 >   that component is an unrecognised licence, which resolves as non-commercial and
 >   share-alike;
 > * pass an explicit `--source_lang`, so the CC BY-NC FastText model is never loaded;
-> * run without the AMCR/TEATER vocabulary (CC BY-NC);
+> * the AMCR/TEATER vocabulary may stay: both are **CC0**, as their rights holder AMČR stated in
+>   [atrium-project#6](https://github.com/ufal/atrium-project/issues/6#issuecomment-5867861653) (2026-09-28). Paradata
+>   written before then labels them CC BY-NC 4.0. With LINDAT, Tag-and-Protect still brings UDPipe's CC BY-NC-SA models;
 > * check the `license_detail` block of the paradata for the run — it records which
 >   components were exercised and why the result resolved as it did.
 >

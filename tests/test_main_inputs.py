@@ -82,6 +82,37 @@ def test_an_explicitly_named_alto_file_is_still_processed_in_metadata_mode(workd
     assert processed == ["scan.alto.xml"]
 
 
+def _shipped_formats(workdir):
+    """A config.txt with the shipped `formats = alto.xml` (the ALTO sample's setting)."""
+    (workdir / "config.txt").write_text("[DEFAULT]\nformats = alto.xml\n", encoding="utf-8")
+
+
+def test_xpaths_on_the_command_line_is_a_metadata_run_despite_the_shipped_formats(workdir, monkeypatch, capsys):
+    """(issue #46) AMČR's recipe names --xpaths and no --formats; config.txt's alto.xml must not turn it
+    into an ALTO run (exit 2 on a folder of records, only the ALTO file of a mixed folder)."""
+    _shipped_formats(workdir)
+    code, processed = _run(monkeypatch, "docs", "--xpaths", "fields.txt", "--source_lang", "cs", "-o", "out")
+    assert code == EXIT_OK
+    assert processed == ["record.xml"]
+    assert "metadata mode with formats 'xml,txt'" in capsys.readouterr().out
+
+
+def test_the_shipped_formats_still_mean_alto_without_xpaths(workdir, monkeypatch):
+    _shipped_formats(workdir)
+    code, processed = _run(monkeypatch, "docs", "--source_lang", "cs", "-o", "out")
+    assert code == EXIT_OK
+    assert processed == ["scan.alto.xml"]
+
+
+def test_an_explicit_formats_still_wins_over_xpaths(workdir, monkeypatch):
+    _shipped_formats(workdir)
+    code, processed = _run(
+        monkeypatch, "docs", "--xpaths", "fields.txt", "--formats", "alto.xml", "--source_lang", "cs", "-o", "out"
+    )
+    assert code == EXIT_OK
+    assert processed == ["scan.alto.xml"]
+
+
 def test_run_record_is_written_even_if_its_folder_vanished_mid_run(workdir, monkeypatch):
     def _removes_the_paradata_folder(**kwargs):
         shutil.rmtree(workdir / "out" / "paradata")

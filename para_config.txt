@@ -3,7 +3,7 @@
 # components or versions change.
 [tool]
 program = translator
-version = v1.2.1-beta
+version = v1.2.2-beta
 repository_fallback = https://github.com/ufal/atrium-translator
 
 [components]
@@ -19,8 +19,12 @@ fasttext       = CC BY-NC 4.0    ; conditional ; FastText language identificatio
 lindat_cubbitt = CC BY-NC-SA 4.0 ; conditional ; LINDAT translation API/models
 udpipe2_engine = MPL 2.0         ; conditional ; UDPipe2 lemmatiser engine
 udpipe2_models = CC BY-NC-SA 4.0 ; conditional ; UDPipe2 linguistic models
-amcr_vocab     = CC BY-NC 4.0    ; conditional ; AMCR vocabulary data
-teater_data    = CC BY-NC 4.0    ; conditional ; TEATER thesaurus data
+# The AMCR `heslo` vocabularies (https://api.aiscr.cz/2.2/oai) and the TEATER thesaurus
+# are CC0, as stated by their rights holder (AMCR, atrium-project#6, comment 5867861653,
+# 2026-09-28). They were labelled CC BY-NC 4.0 before, after the OAI-PMH Identify
+# response for the whole repository; paradata written before that date says so.
+amcr_vocab     = CC0             ; conditional ; AMCR vocabulary data (heslo set)
+teater_data    = CC0             ; conditional ; TEATER thesaurus data
 
 # Issue #4 — alternative translation backends. These are CONDITIONAL: a run only
 # inherits a backend's licence when that backend is actually selected and
@@ -34,8 +38,8 @@ teater_data    = CC BY-NC 4.0    ; conditional ; TEATER thesaurus data
 llm_api        = LLM provider ToS ; conditional ; OpenAI-compatible LLM API output (provider terms govern reuse)
 # CTranslate2 self-host (Phase 3) — permissive stack: Apache-2.0 models on the
 # MIT-licensed CTranslate2 engine. Enables the "permissive recipe" in
-# docs/translation-backends.md (combine with --source_lang + a permissive/empty
-# glossary to avoid the CC BY-NC FastText / AMCR-TEATER components).
+# docs/translation-backends.md (combine with --source_lang to avoid the CC BY-NC
+# FastText component; the AMCR/TEATER glossary is CC0).
 ctranslate2    = MIT             ; conditional ; CTranslate2 inference engine
 eurollm        = Apache-2.0      ; conditional ; EuroLLM instruction-tuned MT model
 madlad400      = Apache-2.0      ; conditional ; MADLAD-400 multilingual NMT model

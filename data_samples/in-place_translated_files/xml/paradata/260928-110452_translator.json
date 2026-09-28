@@ -1,12 +1,12 @@
 {
   "schema_version": "2.0",
   "program": "translator",
-  "tool_version": "v1.2.0-beta",
+  "tool_version": "v1.2.2-beta",
   "repository": "https://github.com/ufal/atrium-translator",
   "runner_ref": "",
   "docker_image": "",
   "python_version": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 11.4.0]",
-  "run_id": "260926-140045",
+  "run_id": "260928-110452",
   "license": "CC BY-NC-SA 4.0",
   "license_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
   "license_detail": {
@@ -19,12 +19,6 @@
       "udpipe2_models"
     ],
     "components": [
-      {
-        "name": "fasttext",
-        "license": "CC BY-NC 4.0",
-        "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
-        "rank": 5
-      },
       {
         "name": "lindat_cubbitt",
         "license": "CC BY-NC-SA 4.0",
@@ -45,34 +39,34 @@
       },
       {
         "name": "amcr_vocab",
-        "license": "CC BY-NC 4.0",
-        "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
-        "rank": 5
+        "license": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rank": 0
       },
       {
         "name": "teater_data",
-        "license": "CC BY-NC 4.0",
-        "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
-        "rank": 5
+        "license": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rank": 0
       }
     ],
     "unknown_licenses": [],
-    "notes": "Effective output license is CC BY-NC-SA 4.0, the most restrictive among 6 component(s) used. Outputs are NON-COMMERCIAL: downstream commercial use is not permitted while this component is in the pipeline. SHARE-ALIKE applies: derivatives must be licensed under the same terms."
+    "notes": "Effective output license is CC BY-NC-SA 4.0, the most restrictive among 5 component(s) used. Outputs are NON-COMMERCIAL: downstream commercial use is not permitted while this component is in the pipeline. SHARE-ALIKE applies: derivatives must be licensed under the same terms."
   },
-  "start_time": "2026-09-26T14:00:45.269915+00:00",
-  "end_time": "2026-09-26T14:03:04.119811+00:00",
-  "duration_seconds": 138.85,
+  "start_time": "2026-09-28T11:04:52.596123+00:00",
+  "end_time": "2026-09-28T11:06:51.137803+00:00",
+  "duration_seconds": 118.542,
   "config": {
     "input_path": "data_samples/my_documents",
     "output_dir": "data_samples/in-place_translated_files/xml",
-    "source_lang": "auto",
+    "source_lang": "cs",
     "target_lang": "en",
     "formats": "xml",
     "mode": "metadata",
     "output_mode": "replace",
     "translation_backend": "lindat",
     "xpaths_file": "amcr-fields.txt",
-    "xsd_url": "",
+    "xsd_url": "https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd",
     "vocabulary": "data_samples/vocabulary.csv",
     "chunk_limit": 4000,
     "lang_id_model": "facebook/fasttext-language-identification",
@@ -128,10 +122,11 @@
       "json": 0
     },
     "performance_per_minute": {
-      "xml": 6.4818,
-      "csv": 6.4818,
+      "xml": 7.5923,
+      "csv": 7.5923,
       "json": 0.0
     }
   },
-  "skipped_files_detail": []
+  "skipped_files_detail": [],
+  "limits_applied": []
 }

@@ -186,3 +186,20 @@ class TestUdpipeRequest:
         mock_post.return_value = _ok()
         items = LindatLemmatizer(url="http://udpipe.test").get_lemmas_with_features("k zámku", lang="cs")
         assert items == [("zámku", "zámek", "Sing")]
+
+
+def test_a_udpipe_timeout_is_a_limit_and_is_recorded(monkeypatch):
+    """(atrium-project#53) UDPIPE_TIMEOUT_S is read per call; a timed-out chunk goes unprotected,
+    which is a result the limit shaped — so it leaves a `skipped` note instead of a bare print."""
+    import requests
+
+    from processors.limit_notes import collecting
+
+    monkeypatch.setenv("UDPIPE_TIMEOUT_S", "2.5")
+    lem = LindatLemmatizer(url="https://udpipe.example.test/process")
+    with patch("processors.lemmatizer.requests.post", side_effect=requests.exceptions.Timeout()) as post:
+        with collecting() as notes:
+            assert list(lem._request_conllu_chunks("Hrad stojí na kopci.", "czech")) == []
+    assert post.call_args.kwargs["timeout"] == 2.5
+    [entry] = notes.as_list()
+    assert (entry["limit"], entry["effect"], entry["value"]) == ("udpipe_timeout_s", "skipped", 2.5)

@@ -1,7 +1,7 @@
 # 📓 atrium-translator — agent_dev_logs/DEVLOG.md (timeline index)
 > _XML in-place translation. 2 open issues (#4, #46). AMČR baseline (atrium-project#67, 2026-09-26): #4 finish ·
-> #46 close after AMČR's production run. `test` HEAD `f876a2f` (2026-09-26) · **v1.2.1-beta** (2026-09-26, the
-> production-readiness fixes). Twelve-factor detail lives in the hub:
+> #46 close after AMČR's production run. `test` HEAD `160f4a4` (2026-09-27) · **v1.2.1-beta** (2026-09-26, the
+> production-readiness fixes) · **v1.2.2-beta prepared** (2026-09-28, not tagged). Twelve-factor detail lives in the hub:
 > `ufal/atrium-project/agent_dev_logs/{digests,plans}/53.*` — the `digests/12factor.*` / `plans/12factor.*` this
 > line used to cite were never written._
 > _Per-issue detail: `digests/{4,46}.digest.md` · `plans/{4,46}.plan.md` · `issues/` exports (source of truth). Cross-repo/hub
@@ -298,8 +298,37 @@ cell-merging stub: only page 76 changes, every number on its own row.
   LLM timeout 120 s) are in hub #53's limits table; the seed and `CreateAction` asks in hub #67.
 - **Not pushed: files delivered in chat.**
 
+## 2026-09-27 — limits, seed test, ct2 on the cluster
+
+- `88a926b` (hub #68): a `/translate` test that a seed keyed unlike the upload is accreted onto, not returned
+  untouched — the translator already did it right. `0551e34` / `160f4a4` (hub #53): every limit declared in
+  `tool_limits.py` (`TRANSLATION_CHUNK_CHARS`, `LANG_ID_*`, `LINDAT_*`, `LLM_*`, `CT2_*`), reported in `/info`,
+  echoed as `limits_applied` / `X-Atrium-Limits-Applied`; the `/translate` error body is `{status, reason, detail,
+  errors|limit}` now. `4afa1e7` / `4964e76`: `process_metadata_xml` logs instead of printing.
+- `4341b8f`: the EuroLLM path uses the checkpoint's Hugging Face tokenizer and chat template. `1e1ce67`: K4TEL's
+  first real `ct2` run (EuroLLM-1.7B int8, CPU) committed as the AMCR replace samples — 15/15 valid against AMCR 2.2,
+  7 fields `untranslated`, and (found 2026-09-28) the prompt glossary inside 13 of the 30 `ok` ones.
+
+## 2026-09-28 — #46 close-out check; hub #6 CC0; hub #70 reserved
+
+- **#46, ÚFAL side: nothing left in the code.** A four-dimension review of `test` (limits · production path ·
+  docs/config · `ct2`), each finding checked by a verifier (28 of 31 agents finished; the 3 cut off were settled by
+  hand), found the shipped `config.txt`'s `formats = alto.xml` turning a `--xpaths` run without `--formats` into an
+  ALTO run that exits 2 (in v1.2.1-beta too — AMČR passes `--formats xml` there), and the CLI without a log handler
+  since `4afa1e7` (the `--xsd` verdict invisible). Fixed, with the `ct2` prompt leak, `jinja2`, the tokenizer
+  directory, NMT inputs, ct2 paradata, the decoding budget, a declared `UDPIPE_TIMEOUT_S`, an end-to-end limits test,
+  and the docs/config contradictions (precedence, append validity, 413 wording, `/translate` without vocabulary).
+  Detail: `digests/46.digest.md` "ÚFAL-side close-out check". Suite 896 → **934 passed**.
+- **Hub #6:** AMČR stated the `heslo` vocabularies and TEATER are CC0 → `amcr_vocab`, `teater_data` = `CC0` in
+  `para_config.txt`; a EuroLLM + glossary run resolves to MIT, LINDAT stays CC BY-NC-SA 4.0.
+- **Hub #70:** `entities[].translation_en` documented as reserved (unwritten until #70 decides after the pilot).
+- **Samples:** the AMCR replace folder stays the `ct2` run, documented as such; the stale LINDAT record left its
+  `paradata/`.
+- **Version:** `para_config.txt` / `CITATION.cff` → v1.2.2-beta (`check_version.py --tag v1.2.2-beta` passes).
+- **Not pushed: files delivered in chat.**
+
 ---
 
-*Timeline index refreshed 2026-09-26 (AMČR baseline entry and header); earlier 2026-09-13 against live `test` HEAD. Entries through 2026-09-07 were verified against the
+*Timeline index refreshed 2026-09-28 (2026-09-27/28 entries, header); 2026-09-26 (AMČR baseline entry and header); earlier 2026-09-13 against live `test` HEAD. Entries through 2026-09-07 were verified against the
 `CONTRIBUTING.md` changelog table and open-issue state via the GitHub API. Nothing removed from the issue itself
 (per hub #29); this file is a derived reading aid in `agent_dev_logs/`.*
