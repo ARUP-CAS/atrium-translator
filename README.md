@@ -204,7 +204,7 @@ pip install -r requirements.txt
 ## 🐳 Docker & Compose
 
 Published images, one per entry point. Both are built from the same `Dockerfile`
-and run as a non-root user (`atrium`, uid 10001):
+and run as a non-root user (`atrium`, uid 10001) by default:
 
 | Image                                          | Stage  | Entry point             | Purpose      |
 |------------------------------------------------|--------|-------------------------|--------------|
@@ -219,23 +219,27 @@ suffix belongs to the image **name**, not the tag: `ghcr.io/ufal/atrium-translat
 
 ```bash
 # ./data/input holds the ALTO XML; results land in ./data/output
-mkdir -p data/input data/output && sudo chown -R 10001 data
+mkdir -p data/input data/output
 
-docker run --rm -v "$PWD/data:/data" \
+docker run --rm --user "$(id -u):0" -v "$PWD/data:/data" \
   ghcr.io/ufal/atrium-translator:latest \
   /data/input --alto --formats alto.xml --target_lang en -o /data/output
 
 # AMCR metadata records (./data/input holds the *.xml records), the issue #46 production shape:
 # replace mode, validated against AMCR 2.2. --xsd exists only in this batch image, not in /translate.
-docker run --rm -v "$PWD/data:/data" \
+docker run --rm --user "$(id -u):0" -v "$PWD/data:/data" \
   ghcr.io/ufal/atrium-translator:latest \
   /data/input --xpaths amcr-fields.txt --formats xml --source_lang cs --target_lang en \
   --output-mode replace --xsd https://api.aiscr.cz/schema/amcr/2.2/amcr.xsd -o /data/output
 ```
 
-> ⚠️ **Create `./data` yourself first.** The container runs as uid 10001, and a
-> bind-mount directory that Docker creates is owned by root — the write to
-> `/data/output` then fails with `EACCES`. The `chown` above is the whole fix.
+> ⚠️ **Run as yourself, so the container can write `./data`.** The image runs as uid 10001 by
+> default, and `./data` belongs to you. `--user "$(id -u):0"` runs the container as your uid with
+> group 0; every path the image writes (`/data`, `/cache`, `$HOME`) is group-0 writable for exactly
+> this. Docker Desktop (macOS, Windows) needs neither. Under compose, `./data` is in the clone
+> (`data/.gitkeep`) and the services run as `user: "${ATRIUM_UID:-10001}:0"`: on Linux, put your
+> uid in `.env` once — `echo "ATRIUM_UID=$(id -u)" >> .env`. (atrium-project#69, roadmap B6; this
+> replaces the old `sudo chown -R 10001 data` step.)
 
 The batch entry point exits **non-zero** on failure (`1` usage · `2` nothing
 matched the formats · `3` one or more documents failed), so it can be wrapped in

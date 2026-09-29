@@ -50,11 +50,20 @@ RUN pip install -r requirements.txt -r service/requirements.txt
 
 COPY . .
 
-# Non-root runtime user owning only the HF cache and data mountpoint.
+# Non-root runtime user owning only the HF cache, the data mountpoint and its home.
 # /app remains owned by root to enforce source immutability.
+#
+# Owned atrium:0 and group-writable (`g=u`): the arbitrary-UID convention (OpenShift's),
+# atrium-project#69 / roadmap B6. docker-compose.yml runs this image as
+# `user: "${ATRIUM_UID:-10001}:0"`, so on Linux the container can run as the uid that owns
+# the ./data bind mount, and a uid with no passwd entry still reaches /cache, /data and
+# $HOME through group 0. HOME is explicit because without a passwd entry it would be `/`.
+# The default runtime -- uid 10001 as the owner -- is unchanged.
 RUN useradd --create-home --uid 10001 atrium \
     && mkdir -p /cache/huggingface /data \
-    && chown -R atrium:atrium /cache /data
+    && chown -R atrium:0 /cache /data /home/atrium \
+    && chmod -R g=u /cache /data /home/atrium
+ENV HOME=/home/atrium
 USER atrium
 
 ENTRYPOINT ["python", "main.py"]
