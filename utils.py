@@ -870,7 +870,10 @@ def process_metadata_xml(
         # It cannot be written here: in the pipeline order (pc→alto→translate→nlp→llm),
         # `entities[]` is produced by nlp-enrich, AFTER the translator, so it does not exist
         # yet in any real run and a per-entity pass in this function would be dead code
-        # (issue #13 alignment audit, P0.6). #70 decides between three options:
+        # (issue #13 alignment audit, P0.6). #70 decided on 2026-09-30 for option 3: the
+        # AMČR pilot produces English only for free-text metadata, vocabulary fields take
+        # AMČR's own English labels, and entity facets go by the coarse types, so nothing
+        # asks for English entity names. The three options, kept for when something does:
         #   1. a second translator pass over an enriched record — read `doc.get_block("entities")`,
         #      translate each `surface`, `merge_block("entities", rows, own_fields=["translation_en"])`,
         #      then `assert_fields_survived("entities", rows, ["translation_en"])`;
@@ -1774,7 +1777,7 @@ def process_alto_xml(
         # ATRIUM Document JSON accretion update for ALTO blocks. See the metadata-path
         # twin above for why `translations` carries language-pair metadata (not the
         # translated corpus text), and for `entities[].translation_en` — reserved for this
-        # repo and written by no code path until atrium-project#70 decides.
+        # repo and written by no code path (atrium-project#70, decided 2026-09-30).
         if doc is not None:
             doc.set_block(
                 "translations",

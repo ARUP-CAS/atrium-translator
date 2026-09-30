@@ -1114,8 +1114,9 @@ version **`1.0`**. That version is frozen as the hub tag
 What this tool writes into the record: the `translations` block (`source_lang`, `target_lang`, `backend`,
 `output_mode`, `detected_source_lang`), `derived_from.translated_xml` and the licence block.
 **`entities[].translation_en` is reserved:** the schema assigns it to the translator, but `entities[]` is written by
-nlp-enrich, which runs after the translator, so no code path here writes it until
-[atrium-project#70](https://github.com/ufal/atrium-project/issues/70) decides (after the AMČR pilot).
+nlp-enrich, which runs after the translator, so no code path here writes it. It stays reserved
+([atrium-project#70](https://github.com/ufal/atrium-project/issues/70), decided 2026-09-30): the AMČR pilot
+produces English only for free-text metadata, so nothing asks for English entity names.
 
 What may change after the freeze, and what a new major version takes, is in the hub's
 [Freeze & conformance](https://github.com/ufal/atrium-project/blob/main/docs/document_schema.md#freeze--conformance).
