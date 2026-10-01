@@ -28,7 +28,9 @@ class FakeParadataLogger:
         self.paradata_dir = paradata_dir
         self.output_types = output_types or []
         self._run_id = "test-run"
-        self.run_id = "test-run"  # mirrors ParadataLogger's public accessor
+        self.run_id = "test-run"  # mirrors ParadataLogger's public accessors
+        self.run_uuid = "urn:uuid:00000000-0000-4000-8000-000000000000"
+        self.paradata_ref = str(Path(paradata_dir) / f"{self.run_id}_{program}.json")
         self.successes: list[str] = []
         self.components: list[str] = []
         self.skipped: list[tuple[str, str]] = []

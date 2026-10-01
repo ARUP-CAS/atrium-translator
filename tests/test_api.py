@@ -32,10 +32,19 @@ _ALTO_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _json_part(body: bytes) -> dict:
-    """Extract the document-record part of the multipart/mixed /translate response."""
-    tail = body.split(b"Content-Type: application/json", 1)[1]
-    return json.loads(tail[tail.index(b"{") : tail.rindex(b"}") + 1])
+def _parts(response) -> dict:
+    """The multipart/mixed /translate response, as {file name: body}."""
+    boundary = response.headers["content-type"].split("boundary=", 1)[1].encode()
+    parts = {}
+    for chunk in response.content.split(b"--" + boundary)[1:-1]:
+        head, _, body = chunk.removeprefix(b"\r\n").removesuffix(b"\r\n").partition(b"\r\n\r\n")
+        parts[head.split(b'filename="', 1)[1].split(b'"', 1)[0].decode()] = body
+    return parts
+
+
+def _json_part(response) -> dict:
+    """The document-record part of the multipart/mixed /translate response."""
+    return next(json.loads(body) for name, body in _parts(response).items() if name.endswith(".document.json"))
 
 
 def test_info_endpoint():
@@ -186,7 +195,7 @@ def test_translate_real_pipeline_keeps_the_multi_dot_doc_id():
     assert "multipart/mixed" in response.headers["content-type"]
     assert f'filename="{MULTI_DOT_DOC_ID}.document.json"'.encode() in response.content
 
-    record = _json_part(response.content)
+    record = _json_part(response)
     assert record["doc_id"] == MULTI_DOT_DOC_ID
     assert record["pages"][0]["quality_score"] == 0.98  # baseline accreted, not orphaned
     assert record["translations"] == {
@@ -235,10 +244,80 @@ def test_translate_real_pipeline_accretes_onto_a_seed_keyed_unlike_the_upload():
     assert response.status_code == 200, response.content[:400]
     assert f'filename="{seed_id}.document.json"'.encode() in response.content
 
-    record = _json_part(response.content)
+    record = _json_part(response)
     assert record["doc_id"] == seed_id
     assert record["pages"][0]["quality_score"] == 0.98
     assert record["translations"]["backend"] == "lindat"
+
+
+def _fake_models():
+    translator = MagicMock()
+    translator.name = "lindat"
+    translator.vocabulary = {}
+    translator.protected_count = 0
+    translator.translate.side_effect = lambda text, *a, **k: f"EN:{text}"
+    translator.license_components.return_value = ["lindat_cubbitt"]
+    return {"translator": translator, "identifier": MagicMock()}
+
+
+#: An AMČR seed (atrium-project#71): the file id and the archive's own view of the original.
+_AMCR_SEED = {
+    "doc_id": "C-202000543A-DT-27",
+    "source": {"sha512": "c" * 128, "filename": "C-202000543A-DT-27.pdf", "media_type": "application/pdf"},
+}
+
+
+def _translate(response_format=None, seed=_AMCR_SEED):
+    files = {"file": ("scan.alto.xml", _ALTO_XML, "application/xml")}
+    if seed is not None:
+        files["document_json"] = ("seed.document.json", json.dumps(seed).encode(), "application/json")
+    data = {"is_alto": "true", **({"response_format": response_format} if response_format else {})}
+    with patch("service.api.models", _fake_models()):
+        return client.post("/translate?source_lang=cs&target_lang=en", files=files, data=data)
+
+
+def _assert_the_run_of(record, action):
+    """The action passes the shared contract check, and its @id is the run_uuid on the blocks
+    this call wrote (atrium-project#71)."""
+    from atrium_rocrate import action_problems
+
+    assert action_problems(action) == []
+    stamps = record["assembled"]["blocks"]
+    assert {stamps[block]["run_uuid"] for block in ("translations", "derived_from")} == {action["@id"]}
+    assert record["provenance"]["contributors"][-1]["paradata_ref"] == action["@id"]
+    assert {"#block-translations", "#block-derived_from"} <= {entity["@id"] for entity in action["result"]}
+    assert "scan_en.alto.xml" in {entity["name"] for entity in action["result"]}
+
+
+def test_an_amcr_seed_keeps_its_identity_and_the_multipart_form_carries_the_run():
+    """The seed's id and source come back unchanged (the translator reads no source), and the
+    multipart form gains a fourth part, `paradata.json`: the call's CreateAction."""
+    response = _translate()
+    assert response.status_code == 200, response.content[:400]
+    parts = _parts(response)
+    assert list(parts) == [
+        "scan_en.alto.xml",
+        "C-202000543A-DT-27.document.json",
+        "limits_applied.json",
+        "paradata.json",
+    ]
+    assert b"Content-Type: application/ld+json" in response.content
+    record = json.loads(parts["C-202000543A-DT-27.document.json"])
+    assert record["doc_id"] == _AMCR_SEED["doc_id"] and record["source"] == _AMCR_SEED["source"]
+    _assert_the_run_of(record, json.loads(parts["paradata.json"]))
+
+
+def test_a_json_response_carries_the_run_and_a_bare_xml_one_does_not():
+    body = _translate("json").json()
+    _assert_the_run_of(body["document_json"], body["paradata"])
+
+    body = _translate("json", seed=None).json()
+    assert "document_json" not in body
+    assert [entity["name"] for entity in body["paradata"]["result"]] == ["scan_en.alto.xml"]
+
+    response = _translate(seed=None)
+    assert response.headers["content-type"].startswith("application/xml")
+    assert b"CreateAction" not in response.content
 
 
 # ──────────────────────────────────────────────────────────────────────────────

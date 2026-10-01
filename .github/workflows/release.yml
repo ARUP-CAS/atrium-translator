@@ -96,6 +96,9 @@ jobs:
           # digest the OpenAPI document -- /openapi.json and /info `openapi_sha256` need it
           # (atrium-project#32 round 2).
           cp atrium_openapi.py dist/
+          # atrium_rocrate.py (+ atrium_vocab.py, which it imports): service/api.py builds the
+          # call's CreateAction, returned as the response's `paradata` (atrium-project#71).
+          cp atrium_rocrate.py atrium_vocab.py dist/
 
           # The HTTP surface. atrium_service.py and healthcheck.py are canonical
           # files held byte-identical by para-drift; the service does not start

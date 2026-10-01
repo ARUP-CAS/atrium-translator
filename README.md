@@ -988,7 +988,9 @@ C-TX-202500252,,//amcr:amcr/amcr:dokument/amcr:popis,"Stará Boleslav - odvodně
 The wrapper generates a **run-level** JSON provenance record after every execution, named
 `YYMMDD-HHmmss_translator.json`. It is written to the run's **output directory** alongside the
 translated files (the in-repo [paradata](data_samples/in-place_translated_files/alto/paradata) 📁 directories
-under `data_samples/` hold only example logs for development).
+under `data_samples/` hold only example logs for development). The `/translate` service writes no
+such file: it returns each call's run as a Process Run Crate `CreateAction`, the response's
+`paradata` (atrium-project#71, [service/README.md](service/README.md)).
 
 They are separate from the per-document translation CSV logs above: CSV logs capture what was
 translated line by line; paradata JSONs capture *how the run was configured and what it produced in

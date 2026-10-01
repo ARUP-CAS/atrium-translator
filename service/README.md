@@ -59,7 +59,8 @@ the translated document, structurally identical to the input.
 
 When `document_json` is supplied the response is instead `multipart/mixed`: the
 translated XML first, then the updated ATRIUM Document JSON, then `limits_applied.json`
-(see [Limits](#limits)), each with its own `Content-Disposition` filename.
+(see [Limits](#limits)), then `paradata.json` (`application/ld+json`, the call's
+provenance, below), each with its own `Content-Disposition` filename.
 
 **Limits applied.** When a limit shaped the translation without refusing it — a segment
 split into chunks, a language decided on a sample, a segment left in the source language
@@ -80,12 +81,22 @@ instead, typed in the spec as `TranslateResponse` — the shape a client generat
 {"type": "alto", "filename": "CTX000000003-1_en.alto.xml", "media_type": "application/xml",
  "content": "<?xml version='1.0' encoding='UTF-8'?>\n<alto …>…</alto>",
  "limits_applied": [],
- "document_json": {"doc_id": "CTX000000003", "translations": {"…": "…"}, "…": "…"}}
+ "document_json": {"doc_id": "CTX000000003", "translations": {"…": "…"}, "…": "…"},
+ "paradata": {"@id": "urn:uuid:…", "@type": "CreateAction", "…": "…"}}
 ```
 
 `type` is `alto` or `metadata`; `content` is the translated XML as UTF-8 text; `document_json`
 is present only when a record was sent; `limits_applied` is the full list (the header is still
-set). `paradata` is reserved for the run's provenance (atrium-project#67 R2) and not returned yet.
+set).
+
+**`paradata`** is the call's provenance (atrium-project#71): one Process Run Crate `CreateAction`,
+built by `atrium_rocrate.create_action()`, in the JSON response and as the multipart form's
+`paradata.json`. Its `@id` is the call's `run_uuid`, which also stamps every block the call wrote
+into the record; `object` is the upload (by content hash) and the record sent, `result` the blocks
+written and the translated XML; `agent` is `ATRIUM_RUN_AGENT` when set. A bare XML answer has no
+place for it, and an error response carries none. The service writes no paradata file. Hub
+[`docs/rocrate_export.md`](https://github.com/ufal/atrium-project/blob/main/docs/rocrate_export.md) §5
+describes it.
 
 ### Errors
 

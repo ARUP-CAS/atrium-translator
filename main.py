@@ -29,7 +29,7 @@ except ImportError:
         print()
 
 
-from atrium_document import DocumentRecord, canonical_doc_id, load_document, validate_document
+from atrium_document import DocumentRecord, canonical_doc_id, load_document, validate_baseline, validate_document
 from atrium_limits import LimitExceeded
 from atrium_paradata import ParadataLogger
 from processors.backend import TranslationBackend, get_backend
@@ -157,6 +157,10 @@ def _baseline_is_invalid(baseline: Path | None) -> bool:
 
     A baseline that cannot be READ at all is not this function's problem —
     ``DocumentRecord.open()`` reports on it a few lines later, with the right message.
+
+    An AMČR seed (``doc_id`` and ``source`` only, atrium-project#71) is checked against the seed
+    profile (``validate_baseline``), not the full schema it could never pass: it used to be
+    reported here as an invalid baseline, which also demoted this stage's own output gate.
     """
     if not baseline or not Path(baseline).exists():
         return False
@@ -165,7 +169,7 @@ def _baseline_is_invalid(baseline: Path | None) -> bool:
     except Exception:
         return False
     try:
-        validate_document(record)
+        validate_baseline(record)
     except (RuntimeError, FileNotFoundError) as exc:
         # RuntimeError = jsonschema missing; FileNotFoundError = the schema itself was not
         # vendored next to the module. Neither means "the record is bad".
@@ -543,7 +547,9 @@ def process_single_file(
     file_key = canonical_doc_id(file_path)
     doc_id = record_doc_id(file_path, args.document_json)
     csv_log_path = output_file.with_name(f"{file_key}_log.csv")
-    paradata_ref = str(Path(_logger.paradata_dir) / f"{_logger.run_id}_{_logger.program}.json")
+    # The paradata file this run writes, or its run_uuid when it writes none (the service,
+    # atrium-project#71).
+    paradata_ref = _logger.paradata_ref
 
     doc_json_out = args.document_json_out or output_file.with_name(f"{doc_id}.document.json")
     success = False
@@ -590,6 +596,7 @@ def process_single_file(
                 program="translator",
                 baseline=args.document_json,
                 run_id=_logger.run_id,
+                run_uuid=_logger.run_uuid,
                 paradata_ref=paradata_ref,
             ) as doc:
                 if args.alto:

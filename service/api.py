@@ -9,7 +9,8 @@ and its error statuses, so the committed ``service/openapi.json`` — attached t
 release, and what the AMČR pipeline generates its clients from — types every field.
 ``/translate`` answers the translated XML (or multipart/mixed with the record) as before;
 ``response_format=json`` asks for one JSON object instead (``TranslateResponse``), the
-shape a generated client reads without a multipart parser. The models below DOCUMENT the
+shape a generated client reads without a multipart parser. Both of those carry the run's
+Process Run Crate ``CreateAction`` (atrium-project#71); a bare XML answer has no place for it. The models below DOCUMENT the
 responses (``response_model=None``), and ``tests/test_api_contract.py`` validates real
 responses against the published schema. Refusals carry registered reasons: an upload that
 is not ``.xml`` is 415 ``unsupported_media_type``, a record that cannot be opened is 422
@@ -34,6 +35,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+import atrium_rocrate
 from atrium_document import canonical_doc_id
 from atrium_limits import LimitExceeded, LimitNotes
 from atrium_paradata import ParadataLogger
@@ -97,6 +99,9 @@ logger = logging.getLogger(__name__)
 #: The tool id (/info `service`, the spec's `x-atrium-service`): the repository name.
 SERVICE = "atrium-translator"
 
+#: Where para_config.txt (the tool version and licences the paradata records) lives: the repo root.
+_PARA_CONFIG_DIR = str(Path(__file__).resolve().parents[1])
+
 # Every limit this service has is declared in tool_limits.py (atrium-project#53, factor III)
 # and read per request. These are the import-time values, kept because tests and clients
 # import them.
@@ -153,8 +158,10 @@ class TranslateResponse(BaseModel):
         ),
     )
     paradata: Optional[CreateAction] = Field(
-        None,
-        description="The run's provenance (atrium-project#67 R2). Not returned yet: always absent.",
+        description=(
+            "The call's provenance: its Process Run Crate `CreateAction` (atrium-project#71), whose `@id` is the "
+            "`run_uuid` stamped into `document_json`."
+        ),
     )
 
 
@@ -168,8 +175,8 @@ class TranslatorInfo(InfoBase):
 _TRANSLATE_200: Dict[str, Any] = {
     "description": (
         "The translated XML (`application/xml`, as an attachment). With a record sent, `multipart/mixed`: the "
-        "XML, the record (`application/json`) and `limits_applied.json`. With `response_format=json`, one "
-        "`TranslateResponse`."
+        "XML, the record (`application/json`), `limits_applied.json` and `paradata.json` (the call's Process Run "
+        "Crate `CreateAction`, `application/ld+json`). With `response_format=json`, one `TranslateResponse`."
     ),
     "headers": {
         LIMITS_HEADER: {
@@ -663,11 +670,16 @@ async def translate_document(
             if isinstance(details, dict):
                 para_config.update(details)
 
+        # The call's paradata (atrium-project#71). paradata_dir=None: a service writes no
+        # paradata file; the run goes back as the response's `paradata`, and its run_id /
+        # run_uuid stamp the record. config_dir: para_config.txt sits at the repo root, found
+        # from here rather than from whatever the working directory happens to be.
         with ParadataLogger(
             program="translator-api",
             config=para_config,
-            paradata_dir=str(output_dir / "paradata"),
+            paradata_dir=None,
             output_types=["xml", "csv", "json"],
+            config_dir=_PARA_CONFIG_DIR,
         ) as logger:
             # Off the event loop (issue #55): process_single_file() chunks the document
             # and issues one RETRIED, blocking HTTP call to LINDAT per chunk — a single
@@ -693,8 +705,8 @@ async def translate_document(
                 log_backend_components(models["translator"], logger, detected=source_lang == "auto")
 
         # The limits that shaped this translation without refusing it (atrium-project#53):
-        # recorded in the run's paradata by process_single_file, echoed to the caller below
-        # because the paradata itself is not returned yet (#67 R2).
+        # recorded in the run's paradata by process_single_file, and echoed to the caller below
+        # on their own, since a bare XML answer carries no paradata.
         limit_notes = LimitNotes(logger.limits_applied)
 
         if not success:
@@ -712,6 +724,13 @@ async def translate_document(
         if baseline_bytes is not None and doc_json_out_path.exists():
             with open(doc_json_out_path, "rb") as fh:
                 json_bytes = fh.read()
+
+    # The run as its CreateAction (atrium-project#71), in the two shapes that have a place for it.
+    action = None
+    if response_format == "json" or json_bytes:
+        action = _run_action(
+            logger, upload_name, content, baseline_bytes is not None, json_bytes, out_filename, xml_bytes
+        )
 
     # The limits echo (atrium-project#53). The response is XML, so the notes travel as an
     # ASCII header — `key=effect:count; …`, present only when a limit applied (header values
@@ -731,6 +750,7 @@ async def translate_document(
             "media_type": "application/xml",
             "content": xml_bytes.decode("utf-8"),
             "limits_applied": limit_notes.as_list(),
+            "paradata": action,
         }
         if json_bytes:
             payload["document_json"] = json.loads(json_bytes)
@@ -742,6 +762,7 @@ async def translate_document(
         boundary = uuid.uuid4().hex
         headers = {"Content-Type": f"multipart/mixed; boundary={boundary}", **extra_headers}
         notes_bytes = json.dumps(limit_notes.as_list(), ensure_ascii=False).encode("utf-8")
+        action_bytes = json.dumps(action, ensure_ascii=False).encode("utf-8")
 
         def generate_multipart():
             yield f"--{boundary}\r\n".encode()
@@ -756,6 +777,10 @@ async def translate_document(
             yield b"Content-Type: application/json\r\n"
             yield b'Content-Disposition: attachment; filename="limits_applied.json"\r\n\r\n'
             yield notes_bytes + b"\r\n"
+            yield f"--{boundary}\r\n".encode()
+            yield b"Content-Type: application/ld+json\r\n"
+            yield b'Content-Disposition: attachment; filename="paradata.json"\r\n\r\n'
+            yield action_bytes + b"\r\n"
             yield f"--{boundary}--\r\n".encode()
 
         return StreamingResponse(generate_multipart(), headers=headers)
@@ -765,6 +790,30 @@ async def translate_document(
         media_type="application/xml",
         headers={"Content-Disposition": f'attachment; filename="{out_filename}"', **extra_headers},
     )
+
+
+def _run_action(
+    run: ParadataLogger,
+    upload_name: str,
+    content: bytes,
+    baseline_sent: bool,
+    record_bytes: Optional[bytes],
+    out_filename: str,
+    xml_bytes: bytes,
+) -> Dict[str, Any]:
+    """The call's CreateAction (atrium-project#71): what it read and what it wrote.
+
+    `object` is the upload and, when one was sent, the record; `result` is the record's blocks
+    this call stamped and the translated XML.
+    """
+    inputs = [atrium_rocrate.file_entity(upload_name, content, media_type="application/xml")]
+    outputs: List[Dict[str, Any]] = []
+    if baseline_sent:
+        record = json.loads(record_bytes) if record_bytes else {}
+        inputs.append(atrium_rocrate.record_entity(str(record.get("doc_id") or canonical_doc_id(upload_name))))
+        outputs = atrium_rocrate.block_entities(atrium_rocrate.blocks_written(record, run.run_uuid))
+    outputs.append(atrium_rocrate.file_entity(out_filename, xml_bytes, media_type="application/xml"))
+    return atrium_rocrate.create_action(run.record, inputs=inputs, outputs=outputs)
 
 
 @app.get(
