@@ -35,6 +35,10 @@ jobs:
       # for ARÚP/ARÚB to deploy. Only `api` is probed — `base` is a batch CLI.
       build-targets: '["base", "api"]'
       probe-targets: '["api"]'
+      # atrium-project#72: `api` is this stage's production image, the one AMČR pins; its
+      # first-party files are declared in .github/production-image.json and checked by
+      # workflow-lint. `base` is the batch CLI (main.py): published, never pinned. The probe
+      # also fails an image with PyMuPDF installed (the reusable's forbidden-distributions).
     secrets:
       # Explicit instead of `secrets: inherit` — the reusable declares and
       # needs only this one (#18). inherit handed it every repo secret.

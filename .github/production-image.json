@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "The production image of this repository and what it is made of (atrium-project#72 A.3).",
+    "Checked on every push by the hub's workflow-lint.reusable.yml (tools/ci/image_closure.py):",
+    "every first-party file the entrypoint can execute must be listed here or be a hub-canonical",
+    "shared component (docs/templates/shared/MANIFEST.json); a listed file it no longer reaches",
+    "fails too. Run it locally with: python ../atrium-project/tools/ci/image_closure.py",
+    "--repo-root . --worktree",
+    "The pilot pins `-api`; `base` is the batch CLI of the same stage (main.py), published,",
+    "never pinned. processors/ct2_translator.py and llm_translator.py are the selectable",
+    "backends (TRANSLATION_BACKEND); the default is LINDAT."
+  ],
+  "image": "ghcr.io/ufal/atrium-translator-api",
+  "target": "api",
+  "entrypoint": "service/api.py",
+  "stage": "English metadata: POST /translate",
+  "core": [
+    "service/api.py",
+    "main.py",
+    "utils.py",
+    "tool_limits.py",
+    "processors/backend.py",
+    "processors/chunking.py",
+    "processors/ct2_translator.py",
+    "processors/http_retry.py",
+    "processors/identifier.py",
+    "processors/language.py",
+    "processors/lemmatizer.py",
+    "processors/limit_notes.py",
+    "processors/llm_translator.py",
+    "processors/quality.py",
+    "processors/translator.py",
+    "processors/vocab.py"
+  ],
+  "vendored": {},
+  "moving": {}
+}

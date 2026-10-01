@@ -333,6 +333,13 @@ cell-merging stub: only page 76 changes, every number on its own row.
   `--xsd-strict` / `XSD_STRICT`); `/translate` refuses a declared over-size request before the body is parsed; the
   `split` note counts segments; the service loads a `ct2` model at startup under a load lock. Files delivered in chat.
 
+## 2026-09-30 — atrium-project#72 round 1: the production image declared
+* `.github/production-image.json` (the `api` target: `service/api.py`, `main.py`, `utils.py`, `tool_limits.py`,
+  `processors/*.py`), checked by the hub's `tools/ci/image_closure.py` in workflow-lint; `docker.yml` names `api` as
+  the production target. Revendored `atrium_openapi.py`, `service/atrium_service.py`, `tests/test_openapi_contract.py`
+  (the release gate's declared-rename rule).
+* Tag draft: `v1.3.1-beta`. **Not pushed: files delivered in chat.**
+
 ---
 
 *Timeline index refreshed 2026-09-28 (2026-09-27/28 entries, header); 2026-09-26 (AMČR baseline entry and header); earlier 2026-09-13 against live `test` HEAD. Entries through 2026-09-07 were verified against the
